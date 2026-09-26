@@ -7,17 +7,20 @@
 
 namespace core {
 
-void voxelizeSolid(const SurfaceMesh& body, FlowField& field)
+std::vector<std::uint8_t> voxelizeSolidMask(const SurfaceMesh& body, const glm::vec3& gridOrigin, const glm::vec3& spacing,
+                                            const glm::ivec3& dims)
 {
-    if (field.empty() || body.empty())
-        return;
-    // Work on a grid twice as fine as the field, then downsample: a field cell
-    // is solid when most of its 8 sub-cells are. Marking whole surface cells
-    // as solid would otherwise fatten the body by up to one cell.
+    const std::size_t cells = static_cast<std::size_t>(std::max(dims.x, 0)) * std::max(dims.y, 0) * std::max(dims.z, 0);
+    std::vector<std::uint8_t> solid(cells, 0);
+    if (cells == 0 || body.empty())
+        return solid;
+    // Work on a grid twice as fine as the target, then downsample: a cell is
+    // solid when most of its 8 sub-cells are. Marking whole surface cells as
+    // solid would otherwise fatten the body by up to one cell.
     constexpr int R = 2;
-    const glm::ivec3 d = field.dims * R;
-    const glm::vec3 sp = field.spacing / static_cast<float>(R);
-    const glm::vec3 origin = field.origin - 0.5f * field.spacing + 0.5f * sp; // centre of sub-cell 0
+    const glm::ivec3 d = dims * R;
+    const glm::vec3 sp = spacing / static_cast<float>(R);
+    const glm::vec3 origin = gridOrigin - 0.5f * spacing + 0.5f * sp; // centre of sub-cell 0
     const std::size_t sy = static_cast<std::size_t>(d.x), sz = sy * static_cast<std::size_t>(d.y);
     const std::size_t n = sz * static_cast<std::size_t>(d.z);
     auto index = [&](int i, int j, int k) { return static_cast<std::size_t>(i) + sy * static_cast<std::size_t>(j) + sz * static_cast<std::size_t>(k); };
@@ -85,24 +88,31 @@ void voxelizeSolid(const SurfaceMesh& body, FlowField& field)
         visit(k < d.z - 1, c + sz);
     }
 
-    // 3. Downsample: a field cell is solid when most of its sub-cells
-    //    are unreachable by air (surface or enclosed volume).
-    const glm::ivec3 fd = field.dims;
-    field.solid.assign(field.cellCount(), 0);
-    for (int k = 0; k < fd.z; ++k)
-        for (int j = 0; j < fd.y; ++j)
-            for (int i = 0; i < fd.x; ++i) {
+    // 3. Downsample: a cell is solid when most of its sub-cells are
+    //    unreachable by air (surface or enclosed volume).
+    const std::size_t ny = static_cast<std::size_t>(dims.y), nx = static_cast<std::size_t>(dims.x);
+    for (int k = 0; k < dims.z; ++k)
+        for (int j = 0; j < dims.y; ++j)
+            for (int i = 0; i < dims.x; ++i) {
                 int solidSubs = 0;
                 for (int dk = 0; dk < R; ++dk)
                     for (int dj = 0; dj < R; ++dj)
                         for (int di = 0; di < R; ++di)
                             solidSubs += !air[index(i * R + di, j * R + dj, k * R + dk)];
-                if (2 * solidSubs > R * R * R) { // strictly more than half
-                    const std::size_t c = field.index(i, j, k);
-                    field.solid[c] = 1;
-                    field.velocity[c] = glm::vec3(0.0f);
-                }
+                if (2 * solidSubs > R * R * R) // strictly more than half
+                    solid[static_cast<std::size_t>(i) + nx * (static_cast<std::size_t>(j) + ny * static_cast<std::size_t>(k))] = 1;
             }
+    return solid;
+}
+
+void voxelizeSolid(const SurfaceMesh& body, FlowField& field)
+{
+    if (field.empty() || body.empty())
+        return;
+    field.solid = voxelizeSolidMask(body, field.origin, field.spacing, field.dims);
+    for (std::size_t c = 0; c < field.solid.size(); ++c)
+        if (field.solid[c])
+            field.velocity[c] = glm::vec3(0.0f);
 }
 
 } // namespace core
