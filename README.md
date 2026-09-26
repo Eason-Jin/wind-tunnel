@@ -23,15 +23,25 @@ GLFW, GLM, Dear ImGui and stb are fetched automatically. OpenFOAM ESI v2406 (`/u
 ```
 
 In the window:
-1. Load a body and orient it.
-2. Pick the **OpenFOAM** solver and press **Run**. On 8 cores a car-sized run takes about 30–40 s at refinement 3, or about 5 min at refinement 4.
-3. Switch views in **Display**: surface Cp, slice plane, streamlines, particles.
+1. Load a model with **Open STL…** (native file dialog) or **Samples** (the OpenFOAM tutorial models).
+2. Set the file units and orientation in the left panel. Wind blows along +X, so the nose should point towards -X.
+3. Set **Wind speed** (km/h or m/s) and press **Simulate / Play** (`Space`).
+   - With **OpenFOAM CFD** selected, this runs the simulation first. A car-sized model takes about 40 s at Normal quality on 8 cores.
+   - It then animates the flow: smoke, marching streamlines and vortex cores.
+4. Toggle layers on the right:
+   - body surface pressure (Cp)
+   - streamlines
+   - smoke
+   - vortex cores
+   - **Section plane**: drag its position slider to re-trace in-plane streamlines live. The model is cut away at the plane.
 
-Results are saved in `cases/run/`. **Open existing OpenFOAM result** reloads them without solving again.
+Use the **view cube** (top right) to snap to faces, edges or corners.
+
+Results are saved in `cases/run/`, and **Advanced → Open saved result** reloads them.
 
 Mouse controls: left-drag to orbit, right-drag to pan, the wheel to zoom, and `F` to reframe.
 
-`--screenshot out.png [--frames N] [--camera yaw,pitch,zoom] [--passes model,slice,...]` renders offscreen and exits. Run `--help` for all options.
+`--screenshot out.png [--frames N] [--camera yaw,pitch,zoom] [--passes model,slice,...] [--ui] [--play]` renders offscreen and exits. Run `--help` for all options.
 
 ## Layout
 
@@ -41,7 +51,7 @@ Mouse controls: left-drag to orbit, right-drag to pan, the wheel to zoom, and `F
 | `src/io` | STL read/write |
 | `src/solvers/openfoam` | Case writer, process runner, field reader. Pipeline: blockMesh → snappyHexMesh → simpleFoam (k-ω SST) → mapFields onto the output grid |
 | `src/solvers/synthetic` | Analytic potential flow for instant previews |
-| `src/render` | GL wrappers, camera, `FlowTextures` (3D textures), and passes: tunnel, model, slice, streamlines, particles |
-| `src/app` | Window, UI, solver worker thread, screenshot mode |
+| `src/render` | GL wrappers, camera, `FlowTextures` (3D textures), and passes: tunnel, model, slice (with in-plane streamlines), streamlines, particles, vortex cores |
+| `src/app` | Window, slicer-style UI (`AppUi.cpp`, `ui/`: theme, view cube, file picker), solver worker thread, screenshot mode |
 
 The renderer only ever sees `core::FlowField`. To add a new solver (e.g. a CUDA LBM), implement `core::ISolver` and produce a field on `core::makeTunnelDomain`'s grid.
