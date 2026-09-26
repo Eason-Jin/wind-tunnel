@@ -593,6 +593,9 @@ void App::handleCameraInput()
 int App::runWindow()
 {
     glfwShowWindow(window_);
+    // The creation hint alone can lose a race with the window manager (seen on
+    // GNOME); maximising the mapped window is reliable.
+    glfwMaximizeWindow(window_);
     if (options_.solve) {
         playAfterSolve_ = options_.play;
         startSolver(solverKind_);
