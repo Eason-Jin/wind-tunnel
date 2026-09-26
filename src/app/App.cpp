@@ -9,6 +9,7 @@
 #include "render/passes/ParticlePass.h"
 #include "render/passes/SlicePass.h"
 #include "render/passes/StreamlinePass.h"
+#include "render/passes/VortexPass.h"
 #include "solvers/openfoam/OpenFoamSolver.h"
 #include "solvers/synthetic/SyntheticSolver.h"
 
@@ -189,6 +190,7 @@ void App::createPasses()
     passes_.push_back(std::make_unique<render::ModelPass>());
     passes_.push_back(std::make_unique<render::SlicePass>());
     passes_.push_back(std::make_unique<render::StreamlinePass>());
+    passes_.push_back(std::make_unique<render::VortexPass>());
     passes_.push_back(std::make_unique<render::ParticlePass>());
     // Default view: body + streamlines. Slice and particles are one click away
     // in the Display panel; all at once is too cluttered to read.
