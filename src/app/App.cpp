@@ -73,6 +73,7 @@ App::App(Options options) : options_(std::move(options))
     // OpenFOAM scales with physical cores; hardware_concurrency counts SMT threads.
     params_.processors = static_cast<int>(std::clamp(std::thread::hardware_concurrency() / 2u, 1u, 8u));
     params_.inletSpeed = 100.0f / 3.6f; // 100 km/h
+    quality_ = options_.quality;
     applyQualityPreset();
     initWindow();
     if (!options_.screenshot || options_.showUi)
@@ -94,6 +95,7 @@ App::App(Options options) : options_(std::move(options))
         fieldIsPreview_ = false;
         fieldSpeed_ = field_.freestreamSpeed;
         params_.inletSpeed = field_.freestreamSpeed;
+        fieldParams_ = params_;
     } else if (f != "none") {
         throw std::runtime_error("Unknown --field value: " + f);
     }
@@ -269,6 +271,7 @@ void App::previewSyntheticField()
         setField(solvers::makeSyntheticField(body_, params_));
         fieldIsPreview_ = true;
         fieldSpeed_ = params_.inletSpeed;
+        fieldParams_ = params_;
         return;
     }
     if (running_) {
@@ -291,6 +294,7 @@ void App::rescaleField(float newSpeed)
         p *= r * r;
     field_.freestreamSpeed = newSpeed;
     fieldSpeed_ = newSpeed;
+    fieldParams_.inletSpeed = newSpeed;
     setField(std::move(field_));
 }
 
@@ -345,6 +349,7 @@ void App::startSolver(SolverKind kind)
     cancel_ = false;
     running_ = true;
     solveSpeed_ = params_.inletSpeed;
+    solveParams_ = params_;
     status_ = "Running " + solver_->name();
 
     worker_ = std::thread([this, body = body_, params = params_]() {
@@ -410,6 +415,7 @@ void App::pollSolver()
     setField(std::move(result));
     fieldIsPreview_ = runningKind_ == SolverKind::Synthetic;
     fieldSpeed_ = solveSpeed_;
+    fieldParams_ = solveParams_;
     status_ = fieldIsPreview_ ? "Instant preview ready (potential flow: no wake or vortices)" : "Simulation finished";
     if (play)
         setPlaying(true);

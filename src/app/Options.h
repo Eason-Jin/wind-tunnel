@@ -15,6 +15,7 @@ namespace app {
 //   --yaw <deg>             rotate the body about the vertical axis
 //   --pitch <deg>           rotate the body about the Y axis (e.g. 90 to lay a tall model down)
 //   --tool <move|rotate>    start with the move or rotate gizmo active
+//   --quality <draft|normal|fine>  simulation quality preset (default normal)
 //   --field <spec>          synthetic | none | openfoam:<workDir>   (default synthetic)
 //   --solve openfoam        run the OpenFOAM solver on startup (window mode)
 //   --passes <a,b,...>      enabled passes by name (case-insensitive), e.g. model,slice
@@ -31,6 +32,7 @@ struct Options {
     float yawDeg = 0.0f;   // rotation about the vertical axis
     float pitchDeg = 0.0f; // rotation about Y
     int tool = 0;          // 0 none, 1 move, 2 rotate
+    int quality = 1;       // 0 draft, 1 normal, 2 fine
     std::string field = "synthetic";
     std::optional<std::string> solve;
     std::optional<std::vector<std::string>> passes;

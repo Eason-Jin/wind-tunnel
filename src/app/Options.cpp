@@ -51,7 +51,10 @@ Options parseOptions(int argc, char** argv)
             o.yawDeg = std::stof(need(i));
         else if (a == "--pitch")
             o.pitchDeg = std::stof(need(i));
-        else if (a == "--tool") {
+        else if (a == "--quality") {
+            const std::string v = need(i);
+            o.quality = v == "draft" ? 0 : v == "fine" ? 2 : v == "normal" ? 1 : throw std::runtime_error("--quality expects draft, normal or fine");
+        } else if (a == "--tool") {
             const std::string v = need(i);
             o.tool = v == "move" ? 1 : v == "rotate" ? 2 : 0;
         } else if (a == "--field")
@@ -80,7 +83,7 @@ Options parseOptions(int argc, char** argv)
             o.camPitchDeg = std::stof(parts[1]);
             o.zoom = std::stof(parts[2]);
         } else if (a == "--help" || a == "-h") {
-            throw std::runtime_error("usage: windtunnel [--stl file] [--scale s] [--up z|y|x] [--yaw deg] [--pitch deg] [--tool move|rotate] [--field synthetic|none|openfoam:<dir>]\n"
+            throw std::runtime_error("usage: windtunnel [--stl file] [--scale s] [--up z|y|x] [--yaw deg] [--pitch deg] [--tool move|rotate] [--quality draft|normal|fine] [--field synthetic|none|openfoam:<dir>]\n"
                                      "  [--solve openfoam] [--passes a,b] [--screenshot out.png] [--frames n] [--ui] [--play]\n"
                                      "  [--size WxH] [--camera yaw,pitch,zoom]");
         } else {

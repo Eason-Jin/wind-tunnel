@@ -130,13 +130,34 @@ void App::applyQualityPreset()
     params_.iterations = kQuality[quality_].iterations;
 }
 
+bool App::gridMatchesField() const
+{
+    const core::SimulationParams& a = fieldParams_;
+    const core::SimulationParams& b = params_;
+    return a.gridCellsX == b.gridCellsX && a.upstream == b.upstream && a.downstream == b.downstream && a.side == b.side &&
+           a.groundPlane == b.groundPlane;
+}
+
 bool App::needsSolve() const
 {
-    if (field_.empty())
+    if (field_.empty() || !gridMatchesField())
         return true;
     if (std::abs(fieldSpeed_ - params_.inletSpeed) > 1e-3f)
         return true;
-    return solverKind_ == SolverKind::OpenFoam && fieldIsPreview_;
+    if (solverKind_ == SolverKind::OpenFoam)
+        return fieldIsPreview_ || fieldParams_.refinementLevel != params_.refinementLevel ||
+               fieldParams_.iterations != params_.iterations;
+    return false;
+}
+
+void App::simulationSettingsChanged()
+{
+    if (field_.empty() || fieldIsPreview_) {
+        previewSyntheticField(); // cheap: follow the new settings immediately
+        return;
+    }
+    if (needsSolve())
+        status_ = "Settings changed - press Simulate to update the result (showing the previous solution)";
 }
 
 void App::setPlaying(bool playing)
@@ -166,7 +187,7 @@ void App::onPlayPressed()
         return;
     }
     if (solverKind_ == SolverKind::Synthetic) {
-        if (!field_.empty() && fieldIsPreview_) {
+        if (!field_.empty() && fieldIsPreview_ && gridMatchesField()) {
             rescaleField(params_.inletSpeed);
             setPlaying(true);
             return;
@@ -513,6 +534,7 @@ void App::drawLeftPanel()
         if (ui::segmented("quality", &q, qLabels, 3, fullW)) {
             quality_ = q;
             applyQualityPreset();
+            simulationSettingsChanged();
         }
         if (quality_ <= 2)
             ui::hint("Estimated run time %s for a car-sized model.", kQuality[quality_].estimate);
@@ -525,15 +547,25 @@ void App::drawLeftPanel()
 
     if (ImGui::TreeNode("Advanced")) {
         bool custom = false;
+        bool edited = false; // a slider was released after a change
+        auto done = [&] { edited |= ImGui::IsItemDeactivatedAfterEdit(); };
         custom |= ImGui::SliderInt("Grid cells (x)", &params_.gridCellsX, 32, 256);
+        done();
         if (solverKind_ == SolverKind::OpenFoam) {
             custom |= ImGui::SliderInt("Iterations", &params_.iterations, 50, 3000);
+            done();
             custom |= ImGui::SliderInt("Refinement", &params_.refinementLevel, 1, 6);
+            done();
             ImGui::SliderInt("CPU cores", &params_.processors, 1, 16);
         }
         ImGui::DragFloat("Upstream (x L)", &params_.upstream, 0.05f, 0.5f, 10.0f, "%.2f");
+        done();
         ImGui::DragFloat("Downstream (x L)", &params_.downstream, 0.05f, 1.0f, 20.0f, "%.2f");
+        done();
         ImGui::DragFloat("Side clearance (x L)", &params_.side, 0.05f, 0.5f, 10.0f, "%.2f");
+        done();
+        if (edited)
+            simulationSettingsChanged();
         if (custom)
             quality_ = 3;
 
@@ -567,8 +599,9 @@ void App::drawLeftPanel()
         ui::sectionHeader("RESULT");
         const int u = static_cast<int>(speedUnit_);
         ImGui::Text("%s", fieldIsPreview_ ? "Instant preview" : "OpenFOAM solution");
-        ui::hint("Solved at %.1f %s. Peak speed %.1f %s.", speedToDisplay(fieldSpeed_, u), speedUnitName(u),
-                 speedToDisplay(field_.maxSpeed(), u), speedUnitName(u));
+        ui::hint("Solved at %.1f %s on a %d x %d x %d grid. Peak speed %.1f %s.", speedToDisplay(fieldSpeed_, u),
+                 speedUnitName(u), field_.dims.x, field_.dims.y, field_.dims.z, speedToDisplay(field_.maxSpeed(), u),
+                 speedUnitName(u));
         if (needsSolve() && !field_.empty())
             ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::colour::kWarning), "Out of date - press Simulate");
     }

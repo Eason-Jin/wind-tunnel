@@ -72,6 +72,8 @@ private:
     // Play / solve workflow.
     void onPlayPressed();
     bool needsSolve() const;
+    bool gridMatchesField() const; // same output grid and tunnel as the current field
+    void simulationSettingsChanged(); // refresh the preview, or flag a CFD result as out of date
     void setPlaying(bool playing);
     void applyQualityPreset();
     render::RenderPass* findPass(const char* name) const;
@@ -115,6 +117,8 @@ private:
     bool fieldIsPreview_ = true; // current field is the instant analytic preview
     float fieldSpeed_ = 0.0f;    // inlet speed (m/s) the current field was computed for
     float solveSpeed_ = 0.0f;    // inlet speed of the run in flight
+    core::SimulationParams fieldParams_; // settings the current field was computed with
+    core::SimulationParams solveParams_; // settings of the run in flight
     SolverKind runningKind_ = SolverKind::Synthetic;
     bool layersShownOnPlay_ = false;
     int quality_ = 1;            // 0 draft, 1 normal, 2 fine, 3 custom

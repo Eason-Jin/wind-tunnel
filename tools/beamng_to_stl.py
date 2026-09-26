@@ -308,14 +308,22 @@ def part_variables(parts, active, config):
 
 
 def wheel_hubs(parts, active, offsets, variables):
-    """Wheel centre per hub group (e.g. wheelhub_FL) from the jbeam nodes,
-    with each part's mount nodeOffset applied (x mirrored for right-side nodes)."""
+    """Tyre centre per hub group (e.g. wheelhub_FL). BeamNG puts the wheel's
+    centre plane at the hub's outer node plus the part's pressureWheels
+    "wheelOffset" (negative = inboard); nodes get the part's mount nodeOffset
+    (x mirrored for right-side nodes)."""
     hubs = {}
     for p in active:
-        rows = parts[p].get("nodes", [])
+        part = parts[p]
+        rows = part.get("nodes", [])
         off = offsets.get(p, {})
         ox, oy, oz = (eval_number(off.get(k, 0), variables) for k in ("x", "y", "z"))
+        wheel_offset = 0.0
+        for r in part.get("pressureWheels", []):
+            if isinstance(r, dict) and "wheelOffset" in r:
+                wheel_offset = eval_number(r["wheelOffset"], variables)
         group = ""
+        nodes = {}
         for r in rows[1:] if rows else []:
             if isinstance(r, dict):
                 g = r.get("group", group)
@@ -324,8 +332,13 @@ def wheel_hubs(parts, active, offsets, variables):
                 if group.startswith("wheelhub_"):
                     x, y, z = float(r[1]), float(r[2]), float(r[3])
                     x += ox if x >= 0 else -ox
-                    hubs.setdefault(group, []).append((x, y + oy, z + oz))
-    return {g: np.mean(np.array(v), axis=0) for g, v in hubs.items()}
+                    nodes.setdefault(group, []).append(np.array((x, y + oy, z + oz)))
+        for g, pts in nodes.items():
+            outer = max(pts, key=lambda q: abs(q[0]))
+            centre = np.mean(np.array(pts), axis=0)
+            centre[0] = outer[0] + np.sign(outer[0]) * wheel_offset
+            hubs[g] = centre
+    return hubs
 
 
 # --------------------------------------------------------------------------
