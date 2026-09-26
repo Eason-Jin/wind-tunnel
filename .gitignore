@@ -9,3 +9,4 @@ cases/
 .vscode
 # Claude Code local state and agent worktrees
 .claude/
+__pycache__/
