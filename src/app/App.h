@@ -2,6 +2,7 @@
 
 #include "app/Options.h"
 #include "app/ui/FilePicker.h"
+#include "app/ui/ViewCube.h"
 #include "core/FlowField.h"
 #include "core/ISolver.h"
 #include "core/SimulationParams.h"
@@ -82,6 +83,7 @@ private:
 
     render::OrbitCamera camera_;
     ui::FilePicker filePicker_;
+    ui::ViewCube viewCube_;
     std::vector<std::unique_ptr<render::RenderPass>> passes_;
 
     std::string bodyPath_;

@@ -198,6 +198,14 @@ void App::drawUi()
     drawLeftPanel();
     drawRightPanel();
     drawStatusBar();
+
+    // View cube in the top-right corner of the 3D view.
+    const float cubeSize = 140.0f;
+    const ImVec2 cubeCentre(io.DisplaySize.x - ui::kRightPanelWidth - cubeSize * 0.75f,
+                            ui::kToolbarHeight + cubeSize * 0.75f);
+    const ui::ViewCubeResult cube = viewCube_.draw(cubeCentre, cubeSize, camera_.yaw, camera_.pitch);
+    if (cube.clicked)
+        camera_.flyTo(cube.yaw, cube.pitch);
 }
 
 void App::drawToolbar()

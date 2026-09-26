@@ -39,6 +39,8 @@ void APIENTRY glDebugCallback(GLenum, GLenum type, GLuint id, GLenum severity, G
 {
     if (severity == GL_DEBUG_SEVERITY_NOTIFICATION)
         return;
+    if (type == GL_DEBUG_TYPE_PERFORMANCE && severity != GL_DEBUG_SEVERITY_HIGH)
+        return; // driver hints (e.g. buffer migration for ImGui's streaming buffers)
     std::cerr << "GL " << (type == GL_DEBUG_TYPE_ERROR ? "ERROR" : "debug") << " [" << id << "]: " << message << '\n';
 }
 
@@ -416,7 +418,7 @@ void App::handleCameraInput()
     }
     // Only start a drag outside the UI; keep it once started.
     if (!dragging_) {
-        if (ImGui::GetIO().WantCaptureMouse)
+        if (ImGui::GetIO().WantCaptureMouse || viewCube_.wantsMouse())
             return;
         int fbw = 0, fbh = 0, ww = 0, wh = 0;
         glfwGetFramebufferSize(window_, &fbw, &fbh);
@@ -453,6 +455,7 @@ int App::runWindow()
         const double now = glfwGetTime();
         const float dt = static_cast<float>(now - last);
         last = now;
+        camera_.update(dt);
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
@@ -513,6 +516,7 @@ int App::runScreenshot()
     const float dt = 1.0f / 60.0f;
     for (int i = 0; i < options_.frames; ++i) {
         const float t = static_cast<float>(i) * dt;
+        camera_.update(dt);
         if (!options_.showUi) {
             renderScene(0, 0, w, h, t, dt);
             continue;
