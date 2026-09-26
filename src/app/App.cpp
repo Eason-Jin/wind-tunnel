@@ -392,11 +392,31 @@ void App::renderScene(int x, int y, int width, int height, float time, float dt)
 
     if (flowTextures_.valid())
         flowTextures_.bind();
+    // With the section plane showing its own in-plane streamlines, the 3D
+    // streamlines are hidden so lines appear only on the plane.
+    render::RenderPass* streamlinePass = findPass("Streamline");
+    const auto* slicePass = dynamic_cast<const render::SlicePass*>(findPass("Slice"));
+    const bool hideStreamlines = streamlinePass && slicePass && slicePass->ownsStreamlines();
+    if (auto* model = dynamic_cast<render::ModelPass*>(findPass("Model"))) {
+        glm::vec4 plane;
+        if (slicePass && slicePass->cutPlane(plane)) {
+            // Keep the half of the body on the far side of the plane from the camera.
+            if (glm::dot(plane, glm::vec4(frame.eye, 1.0f)) > 0.0f)
+                plane = -plane;
+            model->setClipPlane(plane);
+        } else {
+            model->setClipPlane(std::nullopt);
+        }
+    }
+    auto active = [&](const std::unique_ptr<render::RenderPass>& p) {
+        return p->enabled && !(hideStreamlines && p.get() == streamlinePass);
+    };
+
     for (auto& p : passes_)
-        if (p->enabled)
+        if (active(p))
             p->update(frame);
     for (auto& p : passes_)
-        if (p->enabled) {
+        if (active(p)) {
             if (flowTextures_.valid())
                 flowTextures_.bind();
             p->draw(frame);

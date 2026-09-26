@@ -172,6 +172,12 @@ void ModelPass::draw(const FrameContext& frame)
         glPolygonOffset(1.0f, 1.0f);
     }
 
+    if (clipPlane_)
+        glEnable(GL_CLIP_DISTANCE0);
+    const glm::vec4 clip = clipPlane_.value_or(glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
+    shader_.set("uClipPlane", clip);
+    wireShader_.set("uClipPlane", clip);
+
     shader_.use();
     shader_.set("uViewProj", frame.proj * frame.view);
     shader_.set("uEye", frame.eye);
@@ -202,6 +208,7 @@ void ModelPass::draw(const FrameContext& frame)
         glDepthMask(GL_TRUE);
         glDisable(GL_BLEND);
     }
+    glDisable(GL_CLIP_DISTANCE0);
 }
 
 void ModelPass::drawUi()

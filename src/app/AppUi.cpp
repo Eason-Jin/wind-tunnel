@@ -4,6 +4,7 @@
 #include "app/App.h"
 
 #include "app/ui/Theme.h"
+#include "render/passes/SlicePass.h"
 #include "solvers/openfoam/OpenFoamSolver.h"
 #include "solvers/synthetic/SyntheticSolver.h"
 
@@ -465,11 +466,19 @@ void App::drawRightPanel()
     for (render::RenderPass* p : ordered) {
         const LayerInfo* info = layerInfo(p->name());
         ImGui::PushID(p);
-        ImGui::Checkbox("##on", &p->enabled);
+        if (ImGui::Checkbox("##on", &p->enabled) && p->enabled)
+            ImGui::SetNextItemOpen(true); // show a layer's settings when it is switched on
         ImGui::SameLine();
         const bool open = ImGui::TreeNodeEx(info ? info->label : p->name(), ImGuiTreeNodeFlags_SpanAvailWidth);
         if (info && ImGui::IsItemHovered())
             ImGui::SetTooltip("%s", info->help);
+        if (std::strcmp(p->name(), "Streamline") == 0 && p->enabled) {
+            const auto* slice = dynamic_cast<const render::SlicePass*>(findPass("Slice"));
+            if (slice && slice->ownsStreamlines()) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(on section)");
+            }
+        }
         if (open) {
             ImGui::BeginDisabled(!p->enabled);
             p->drawUi();

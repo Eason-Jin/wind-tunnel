@@ -2,6 +2,8 @@
 
 #include "render/Colormap.h"
 #include "render/RenderPass.h"
+
+#include <optional>
 #include "render/gl/GlObjects.h"
 #include "render/gl/Shader.h"
 
@@ -22,7 +24,12 @@ public:
     void draw(const FrameContext& frame) override;
     void drawUi() override;
 
+    // Keep only the side of the body where dot(plane, (p, 1)) >= 0; pass
+    // std::nullopt to draw the whole body.
+    void setClipPlane(std::optional<glm::vec4> plane) { clipPlane_ = plane; }
+
 private:
+    std::optional<glm::vec4> clipPlane_;
     enum class ColorMode { Clay = 0, SurfaceCp = 1 };
 
     // Texture unit for the colormap. Flow textures occupy 0/1; passes should
