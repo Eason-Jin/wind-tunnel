@@ -38,9 +38,9 @@ struct QualityPreset {
     const char* estimate; // car-sized body, 8 cores
 };
 constexpr QualityPreset kQuality[] = {
-    {"Draft", 96, 2, 250, "about 20 s"},
-    {"Normal", 128, 3, 400, "about 40 s"},
-    {"Fine", 176, 4, 600, "about 5 min"},
+    {"Draft", 96, 2, 250, "about 30 s"},
+    {"Normal", 128, 3, 400, "about 1 min"},
+    {"Fine", 176, 4, 600, "5-40 min"},
 };
 
 struct UnitPreset {
@@ -543,7 +543,9 @@ void App::drawLeftPanel()
             simulationSettingsChanged();
         }
         if (quality_ <= 2)
-            ui::hint("Estimated run time %s for a car-sized model.", kQuality[quality_].estimate);
+            ui::hint("OpenFOAM run time: %s on 8 cores. Quality changes the CFD (wake, separation, vortices); "
+                     "the instant preview looks the same at every quality.",
+                     kQuality[quality_].estimate);
         else
             ui::hint("Custom settings (see Advanced).");
     } else {
