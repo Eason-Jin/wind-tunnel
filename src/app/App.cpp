@@ -24,6 +24,7 @@
 #include <stb_image_write.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cctype>
 #include <cstdio>
 #include <cstring>
@@ -69,7 +70,10 @@ App* fromWindow(GLFWwindow* w) { return static_cast<App*>(glfwGetWindowUserPoint
 
 App::App(Options options) : options_(std::move(options))
 {
-    params_.workDir = std::filesystem::path(WT_PROJECT_DIR) / "cases" / "run";
+    // WT_WORK_DIR lets a second instance (e.g. a test run) solve without
+    // overwriting the case of the one already open.
+    const char* workDir = std::getenv("WT_WORK_DIR");
+    params_.workDir = workDir && *workDir ? std::filesystem::path(workDir) : std::filesystem::path(WT_PROJECT_DIR) / "cases" / "run";
     // OpenFOAM scales with physical cores; hardware_concurrency counts SMT threads.
     params_.processors = static_cast<int>(std::clamp(std::thread::hardware_concurrency() / 2u, 1u, 8u));
     params_.inletSpeed = 100.0f / 3.6f; // 100 km/h
