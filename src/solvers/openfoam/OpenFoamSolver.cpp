@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <sstream>
 #include <stdexcept>
@@ -88,6 +89,33 @@ void cleanCaseDir(const fs::path& dir)
             continue;
         fs::remove_all(p);
     }
+}
+
+// Replace the last iteration's U and p with their running means (written by
+// the fieldAverage function object), so the mapped result shows the average
+// wake rather than one snapshot of it. Only the header's object name changes;
+// the (possibly binary) data is copied byte for byte. Returns false, leaving
+// the fields untouched, when no mean was written (a run shorter than the
+// averaging start).
+bool useTimeAverage(const fs::path& timeDir)
+{
+    for (const char* name : {"U", "p"}) {
+        if (!fs::exists(timeDir / (std::string(name) + "Mean")))
+            return false;
+    }
+    for (const std::string name : {"U", "p"}) {
+        std::ifstream in(timeDir / (name + "Mean"), std::ios::binary);
+        std::string data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        const std::size_t at = data.find(name + "Mean;"); // first hit is the header's "object" entry
+        if (at == std::string::npos || at > 2048)
+            throw std::runtime_error("OpenFOAM: unexpected header in " + (timeDir / (name + "Mean")).string());
+        data.replace(at, name.size() + 5, name + ";");
+        std::ofstream out(timeDir / name, std::ios::binary | std::ios::trunc);
+        out.write(data.data(), static_cast<std::streamsize>(data.size()));
+        if (!out)
+            throw std::runtime_error("OpenFOAM: cannot write " + (timeDir / name).string());
+    }
+    return true;
 }
 
 std::string latestTimeDir(const fs::path& caseDir)
@@ -395,6 +423,7 @@ void OpenFoamSolver::run(const core::ProgressFn& progress, const std::atomic<boo
         const std::string latest = latestTimeDir(dir);
         if (latest.empty() || latest == "0")
             throw std::runtime_error("OpenFOAM: simpleFoam wrote no solution time directory in " + dir.string());
+        const bool averaged = useTimeAverage(dir / latest);
 
         // --- Mapping onto the output grid -----------------------------------
         report("Mapping", 0.92f, "Writing output grid case");
@@ -427,7 +456,8 @@ void OpenFoamSolver::run(const core::ProgressFn& progress, const std::atomic<boo
 
         field_ = std::move(f);
         report("Done", 1.0f, "OpenFOAM solution mapped to " + std::to_string(field_.dims.x) + "x" + std::to_string(field_.dims.y) +
-                                 "x" + std::to_string(field_.dims.z) + " grid (solution time " + latest + ")");
+                                 "x" + std::to_string(field_.dims.z) + " grid (solution time " + latest +
+                                 (averaged ? ", time-averaged)" : ")"));
     } catch (const foam::CancelledError&) {
         field_ = core::FlowField{};
         report("Cancelled", 0.0f, "OpenFOAM run cancelled");

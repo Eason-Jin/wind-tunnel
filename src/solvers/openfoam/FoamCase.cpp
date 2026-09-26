@@ -71,10 +71,13 @@ std::string controlDict(const std::string& app, int endTime, int writeInterval, 
            "timeFormat      general;\ntimePrecision   6;\nrunTimeModifiable false;\n" + functions;
 }
 
-// Drag monitoring plus an automatic stop once the drag coefficient's running
-// average has settled (as in the simpleCar tutorial): a converged steady
-// result without spending the remaining iterations. Never stops before
-// `minIterations`, so an early plateau cannot end the run prematurely.
+// Drag monitoring, an automatic early stop and wake averaging.
+// - The run stops only when the drag has settled AND the pressure residual is
+//   low: an unsteady wake makes the drag oscillate, and its current value
+//   would otherwise meet the average by chance.
+// - U and p are averaged from `minIterations` on. A bluff body's wake never
+//   settles in a steady solver, so the last iteration is just one snapshot of
+//   it; the mean is what the result shows (see OpenFoamSolver).
 std::string convergenceFunctions(const CaseSpec& s, int minIterations)
 {
     const glm::dvec3 c = (glm::dvec3(s.body.min) + glm::dvec3(s.body.max)) * 0.5;
@@ -92,6 +95,13 @@ std::string convergenceFunctions(const CaseSpec& s, int minIterations)
       << "        CofR            (" << c.x << " " << c.y << " " << c.z << ");\n"
       << "        magUInf         " << s.inletSpeed << ";\n        lRef            " << lRef
       << ";\n        Aref            " << aRef << ";\n    }\n"
+      << "    average\n    {\n"
+      << "        type            fieldAverage;\n        libs            (fieldFunctionObjects);\n"
+      << "        timeStart       " << minIterations << ";\n        writeControl    writeTime;\n"
+      << "        fields\n        (\n"
+      << "            U { mean on; prime2Mean off; base iteration; }\n"
+      << "            p { mean on; prime2Mean off; base iteration; }\n"
+      << "        );\n    }\n"
       << "    converged\n    {\n"
       << "        type            runTimeControl;\n        libs            (utilityFunctionObjects);\n"
       << "        timeStart       " << minIterations << ";\n"
@@ -99,7 +109,12 @@ std::string convergenceFunctions(const CaseSpec& s, int minIterations)
       << "                type            average;\n                functionObject  forceCoeffs;\n"
       << "                fields          (Cd);\n                tolerance       1e-3;\n"
       << "                window          50;\n                windowType      exact;\n"
-      << "            }\n        }\n        satisfiedAction end;\n    }\n}\n";
+      << "                groupID         1;\n            }\n"
+      << "            residual\n            {\n"
+      << "                type            equationInitialResidual;\n                fields          (p);\n"
+      << "                value           1e-4;\n                mode            minimum;\n"
+      << "                groupID         1;\n            }\n"
+      << "        }\n        satisfiedAction end;\n    }\n}\n";
     return f.str();
 }
 
