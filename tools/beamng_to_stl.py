@@ -8,8 +8,9 @@ vehicle's Collada (.dae) file, adds tyres as cylinders at the hub positions
 frame (forward = -Y, up = +Z) to the wind tunnel's (flow along +X, nose
 towards -X, up = +Z) and writes a binary STL in metres.
 
-The result is raw "game" geometry: open panels with gaps. Run it through
-build/wt_prep to shrink-wrap it into one closed hull before simulating.
+The result is raw "game" geometry: open panels with gaps. The wind tunnel
+handles that directly (its solid mask flood-fills the air from outside);
+build/wt_prep can optionally shrink-wrap it into one smooth closed hull.
 
 usage:
   beamng_to_stl.py MOD.zip [--vehicle NAME] [--config NAME] [--list] -o OUT.stl
@@ -241,19 +242,90 @@ def flexbody_meshes(part):
             yield r[0]
 
 
+def slot_offsets(part):
+    """slotName -> nodeOffset dict (from a slot row's options), if any."""
+    out = {}
+    if "slots2" in part:
+        rows = part["slots2"]
+        ni = rows[0].index("name")
+        for r in rows[1:]:
+            if isinstance(r, list) and isinstance(r[-1], dict) and "nodeOffset" in r[-1]:
+                out[r[ni]] = r[-1]["nodeOffset"]
+    elif "slots" in part:
+        for r in part["slots"][1:]:
+            if isinstance(r, list) and isinstance(r[-1], dict) and "nodeOffset" in r[-1]:
+                out[r[0]] = r[-1]["nodeOffset"]
+    return out
+
+
 def resolve_parts(parts, config, main):
+    """Active part names, plus the nodeOffset each part was mounted with."""
     chosen = config.get("parts", {})
-    active, queue = [], [main]
+    active, offsets, queue = [], {}, [(main, None)]
     seen = set()
     while queue:
-        name = queue.pop()
+        name, offset = queue.pop()
         if not name or name in seen or name not in parts:
             continue
         seen.add(name)
         active.append(name)
+        if offset is not None:
+            offsets[name] = offset
+        slot_off = slot_offsets(parts[name])
         for slot, default in slot_rows(parts[name]):
-            queue.append(chosen.get(slot, default))
-    return active
+            queue.append((chosen.get(slot, default), slot_off.get(slot, offset)))
+    return active, offsets
+
+
+def eval_number(value, variables):
+    """Evaluate a jbeam number or a simple '$=' expression (vars, arithmetic, case(x == nil, a, b))."""
+    if isinstance(value, (int, float)):
+        return float(value)
+    if not isinstance(value, str):
+        return 0.0
+    expr = value[2:] if value.startswith("$=") else value
+    m = re.fullmatch(r"\s*case\((.*?)==\s*nil\s*,(.*),(.*)\)\s*", expr)
+    if m:
+        var = m.group(1).strip()
+        return eval_number(m.group(3) if var in variables else m.group(2), variables)
+    expr = re.sub(r"\$(\w+)", lambda v: repr(variables.get(v.group(1), 0.0)), expr)
+    if not re.fullmatch(r"[0-9eE.+\-*/() ]+", expr):
+        return 0.0
+    return float(eval(expr, {"__builtins__": {}}))  # arithmetic only, checked above
+
+
+def part_variables(parts, active, config):
+    """Defaults from the active parts' variable tables, overridden by the config."""
+    variables = {}
+    for p in active:
+        rows = parts[p].get("variables", [])
+        for r in rows[1:] if rows else []:
+            if isinstance(r, list) and len(r) > 4 and isinstance(r[0], str):
+                variables[r[0].lstrip("$")] = float(r[4]) if isinstance(r[4], (int, float)) else 0.0
+    for k, v in config.get("vars", {}).items():
+        variables[k.lstrip("$")] = float(v)
+    return variables
+
+
+def wheel_hubs(parts, active, offsets, variables):
+    """Wheel centre per hub group (e.g. wheelhub_FL) from the jbeam nodes,
+    with each part's mount nodeOffset applied (x mirrored for right-side nodes)."""
+    hubs = {}
+    for p in active:
+        rows = parts[p].get("nodes", [])
+        off = offsets.get(p, {})
+        ox, oy, oz = (eval_number(off.get(k, 0), variables) for k in ("x", "y", "z"))
+        group = ""
+        for r in rows[1:] if rows else []:
+            if isinstance(r, dict):
+                g = r.get("group", group)
+                group = g if isinstance(g, str) else (g[0] if g else "")
+            elif isinstance(r, list) and len(r) >= 4 and isinstance(r[1], (int, float)):
+                if group.startswith("wheelhub_"):
+                    x, y, z = float(r[1]), float(r[2]), float(r[3])
+                    x += ox if x >= 0 else -ox
+                    hubs.setdefault(group, []).append((x, y + oy, z + oz))
+    return {g: np.mean(np.array(v), axis=0) for g, v in hubs.items()}
 
 
 # --------------------------------------------------------------------------
@@ -284,23 +356,6 @@ def tyre_size(config, axle):
                 w, aspect, rim = (int(g) for g in m.groups())
                 return rim * 0.0254 / 2 + w / 1000 * aspect / 100, w / 1000
     return 0.29, 0.18
-
-
-def hub_centres(meshes, names):
-    """Left/right wheel centres from the first available hub/brake mesh(es)
-    (vertices clustered by x sign; the bounding-box centre of each side)."""
-    found = [meshes[n].reshape(-1, 3) for n in names if n in meshes]
-    if not found:
-        return []
-    v = np.concatenate(found)
-    out = []
-    for side in (v[v[:, 0] < 0], v[v[:, 0] > 0]):
-        if len(side):
-            lo, hi = side.min(axis=0), side.max(axis=0)
-            c = (lo + hi) / 2
-            c[0] = hi[0] if c[0] > 0 else lo[0]  # outer face of the hub
-            out.append(c)
-    return out
 
 
 # --------------------------------------------------------------------------
@@ -357,7 +412,8 @@ def main():
             if isinstance(doc, dict):
                 parts.update({k: v for k, v in doc.items() if isinstance(v, dict)})
     main_part = config.get("mainPartName", vehicle)
-    active = resolve_parts(parts, config, main_part)
+    active, offsets = resolve_parts(parts, config, main_part)
+    variables = part_variables(parts, active, config)
     wanted = [m for p in active for m in flexbody_meshes(parts[p])]
 
     # Wheel, rim and hubcap meshes (vehicles/common/...) are placed at the hubs
@@ -373,19 +429,15 @@ def main():
     tris = [meshes[m] for m in used]
 
     if not args.no_tyres:
-        # Brake drums/discs sit exactly at the wheel centre; hub meshes can
-        # include suspension arms, so they are only a fallback.
-        wheel_sources = {
-            "F": [[f"{vehicle}_drumbrake_FL", f"{vehicle}_drumbrake_FR"], [f"{vehicle}_hubs_F"]],
-            "R": [[f"{vehicle}_drumbrake_RL", f"{vehicle}_drumbrake_RR"], [f"{vehicle}_hubs_R"]],
-        }
-        for axle, candidates in wheel_sources.items():
+        hubs = wheel_hubs(parts, active, offsets, variables)
+        for group, centre in sorted(hubs.items()):
+            axle = "F" if group.upper().endswith(("FL", "FR")) else "R"
             radius, width = tyre_size(config, axle)
-            centres = next((c for c in (hub_centres(meshes, names) for names in candidates) if c), [])
-            for c in centres:
-                inward = -np.sign(c[0])  # tyre sits inboard of the hub face
-                centre = c + np.array([inward * width / 2, 0.0, 0.0])
-                tris.append(cylinder(centre, np.array([1.0, 0.0, 0.0]), radius, width))
+            tris.append(cylinder(centre, np.array([1.0, 0.0, 0.0]), radius, width))
+            print(f"  tyre {group[9:]}: centre ({centre[0]:+.3f}, {centre[1]:+.3f}, {centre[2]:.3f}) "
+                  f"r={radius:.3f} w={width:.3f}")
+        if not hubs:
+            print("  no wheel hub nodes found; tyres omitted", file=sys.stderr)
 
     t = np.concatenate(tris)
     # BeamNG: forward -Y, up +Z  ->  tunnel: nose towards -X, up +Z.
