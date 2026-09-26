@@ -1,11 +1,18 @@
-#include <glad/glad.h>
-#include <GLFW/glfw3.h>
-#include <glm/glm.hpp>
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include <stb_image_write.h>
+
+#include "app/App.h"
+#include "app/Options.h"
+
 #include <iostream>
 
-int main() {
-    glm::vec3 v(1.0f, 2.0f, 3.0f);
-    std::cout << "GLFW " << glfwGetVersionString() << '\n'
-              << "GLM vec3.y = " << v.y << '\n';
-    return 0;
+int main(int argc, char** argv)
+{
+    try {
+        app::App app(app::parseOptions(argc, argv));
+        return app.run();
+    } catch (const std::exception& e) {
+        std::cerr << e.what() << '\n';
+        return 1;
+    }
 }
