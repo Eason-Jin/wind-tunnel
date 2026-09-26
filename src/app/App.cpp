@@ -246,9 +246,33 @@ void App::applyBodyTransform()
 
 void App::previewSyntheticField()
 {
-    setField(solvers::makeSyntheticField(body_, params_));
-    fieldIsPreview_ = true;
-    fieldSpeed_ = params_.inletSpeed;
+    if (options_.screenshot) {
+        setField(solvers::makeSyntheticField(body_, params_));
+        fieldIsPreview_ = true;
+        fieldSpeed_ = params_.inletSpeed;
+        return;
+    }
+    if (running_) {
+        if (runningKind_ != SolverKind::Synthetic)
+            return; // never interrupt a CFD run for a preview
+        cancelSolver();
+        pollSolver(); // discard the cancelled preview
+    }
+    startSolver(SolverKind::Synthetic);
+}
+
+void App::rescaleField(float newSpeed)
+{
+    if (field_.empty() || fieldSpeed_ <= 0.0f)
+        return;
+    const float r = newSpeed / fieldSpeed_;
+    for (auto& v : field_.velocity)
+        v *= r;
+    for (auto& p : field_.pressure)
+        p *= r * r;
+    field_.freestreamSpeed = newSpeed;
+    fieldSpeed_ = newSpeed;
+    setField(std::move(field_));
 }
 
 void App::setField(core::FlowField field)
@@ -286,7 +310,7 @@ void App::startSolver(SolverKind kind)
         return;
     if (worker_.joinable())
         worker_.join();
-    solverKind_ = kind;
+    runningKind_ = kind;
     if (kind == SolverKind::OpenFoam)
         solver_ = std::make_unique<solvers::OpenFoamSolver>();
     else
@@ -354,6 +378,8 @@ void App::pollSolver()
     const bool play = playAfterSolve_;
     playAfterSolve_ = false;
     if (!error.empty()) {
+        if (error == "Cancelled" && runningKind_ == SolverKind::Synthetic)
+            return; // superseded preview
         status_ = error == "Cancelled" ? "Simulation cancelled" : "Simulation failed: " + error;
         std::cerr << status_ << '\n';
         return;
@@ -363,9 +389,9 @@ void App::pollSolver()
         return;
     }
     setField(std::move(result));
-    fieldIsPreview_ = solverKind_ == SolverKind::Synthetic;
+    fieldIsPreview_ = runningKind_ == SolverKind::Synthetic;
     fieldSpeed_ = solveSpeed_;
-    status_ = "Simulation finished";
+    status_ = fieldIsPreview_ ? "Instant preview ready (potential flow: no wake or vortices)" : "Simulation finished";
     if (play)
         setPlaying(true);
 }

@@ -97,7 +97,8 @@ void StreamlinePass::computeDefaults()
     centreY_ = bb.centre().y;
     width_ = 1.4f * bb.size().y;
 
-    const float smallGap = std::max(0.02f * bodyHeight, 0.02f);
+    // Relative gap only: models range from millimetres to metres.
+    const float smallGap = 0.02f * bodyHeight;
     const float zLow = floorZ + smallGap;
     const float zHigh = floorZ + 1.3f * bodyHeight;
     centreZ_ = 0.5f * (zLow + zHigh);

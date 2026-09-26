@@ -159,9 +159,13 @@ void App::onPlayPressed()
         return;
     }
     if (solverKind_ == SolverKind::Synthetic) {
+        if (!field_.empty() && fieldIsPreview_) {
+            rescaleField(params_.inletSpeed);
+            setPlaying(true);
+            return;
+        }
+        playAfterSolve_ = true;
         previewSyntheticField();
-        status_ = "Instant preview (potential flow) - switch to OpenFOAM for real CFD";
-        setPlaying(true);
         return;
     }
     playAfterSolve_ = true;
@@ -234,7 +238,7 @@ void App::drawToolbar()
     // File actions.
     ImGui::SameLine(0, 28);
     centreInBar(H, frameH);
-    ImGui::BeginDisabled(running_ || filePicker_.busy());
+    ImGui::BeginDisabled(cfdRunning() || filePicker_.busy());
     if (ImGui::Button("  Open STL...  "))
         filePicker_.openDialog();
     ImGui::SameLine();
@@ -267,13 +271,13 @@ void App::drawToolbar()
     int unit = static_cast<int>(speedUnit_);
     float shown = speedToDisplay(params_.inletSpeed, unit);
     ImGui::SetNextItemWidth(speedW);
-    ImGui::BeginDisabled(running_);
+    ImGui::BeginDisabled(cfdRunning());
     if (ImGui::DragFloat("##speed", &shown, unit == 0 ? 0.5f : 0.1f, unit == 0 ? 1.0f : 0.3f, unit == 0 ? 600.0f : 170.0f,
                          unit == 0 ? "%.0f" : "%.1f"))
         params_.inletSpeed = std::max(speedFromDisplay(shown, unit), 0.1f);
     if (ImGui::IsItemDeactivatedAfterEdit()) {
         if (fieldIsPreview_)
-            previewSyntheticField();
+            rescaleField(params_.inletSpeed);
         else if (needsSolve())
             status_ = "Wind speed changed - press Play to re-run the simulation";
     }
@@ -286,7 +290,9 @@ void App::drawToolbar()
 
     ImGui::SameLine(0, 18);
     centreInBar(H, playH);
-    if (running_) {
+    if (running_ && !cfdRunning()) {
+        playButton("Preview...", 1, ui::colour::kAccentActive, ui::colour::kAccentActive, ImVec2(playW, playH));
+    } else if (running_) {
         if (playButton("Cancel", 2, ui::colour::kStop, ui::colour::kStopHover, ImVec2(playW, playH)))
             onPlayPressed();
     } else if (playing_) {
@@ -307,7 +313,7 @@ void App::drawToolbar()
     centreInBar(H, frameH);
     ImGui::SetNextItemWidth(solverW);
     int kind = static_cast<int>(solverKind_);
-    ImGui::BeginDisabled(running_);
+    ImGui::BeginDisabled(cfdRunning());
     if (ImGui::Combo("##solver", &kind, "Instant preview\0OpenFOAM CFD\0")) {
         if (kind == 1 && !solvers::OpenFoamSolver::available())
             status_ = "OpenFOAM not found (expected /usr/lib/openfoam/openfoam2406)";
@@ -341,7 +347,7 @@ void App::drawLeftPanel()
         ui::hint("%.2f x %.2f x %.2f m  -  %zu triangles", s.x, s.y, s.z, body_.triangleCount());
     }
 
-    ImGui::BeginDisabled(running_);
+    ImGui::BeginDisabled(cfdRunning());
     ImGui::TextUnformatted("File units");
     const char* unitLabels[] = {kUnits[0].name, kUnits[1].name, kUnits[2].name, kUnits[3].name};
     if (ui::segmented("units", &unitsPreset_, unitLabels, 4, fullW) && !bodyPath_.empty()) {
@@ -372,7 +378,7 @@ void App::drawLeftPanel()
     // ---- Simulation -----------------------------------------------------
     ImGui::Dummy(ImVec2(0, 6));
     ui::sectionHeader("SIMULATION");
-    ImGui::BeginDisabled(running_);
+    ImGui::BeginDisabled(cfdRunning());
     if (solverKind_ == SolverKind::OpenFoam) {
         ImGui::TextUnformatted("Quality");
         const char* qLabels[] = {kQuality[0].name, kQuality[1].name, kQuality[2].name};

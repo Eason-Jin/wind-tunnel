@@ -43,7 +43,8 @@ private:
     // Scene changes (main thread only).
     bool loadBody(const std::string& path, float scale); // empty path = test sphere
     void applyBodyTransform(); // rawBody_ -> body_ (scale, orientation, placed on the floor)
-    void previewSyntheticField();
+    void previewSyntheticField(); // async in window mode, synchronous for screenshots
+    void rescaleField(float newSpeed); // potential flow scales exactly with U
     void setField(core::FlowField field);
     void notifyBody();
     void notifyField();
@@ -72,6 +73,7 @@ private:
     void setPlaying(bool playing);
     void applyQualityPreset();
     render::RenderPass* findPass(const char* name) const;
+    bool cfdRunning() const { return running_ && runningKind_ == SolverKind::OpenFoam; }
     void openPickedFile(const std::string& path);
 
     int runWindow();
@@ -106,6 +108,7 @@ private:
     bool fieldIsPreview_ = true; // current field is the instant analytic preview
     float fieldSpeed_ = 0.0f;    // inlet speed (m/s) the current field was computed for
     float solveSpeed_ = 0.0f;    // inlet speed of the run in flight
+    SolverKind runningKind_ = SolverKind::Synthetic;
     bool layersShownOnPlay_ = false;
     int quality_ = 1;            // 0 draft, 1 normal, 2 fine, 3 custom
     int unitsPreset_ = 0;        // STL units: m, cm, mm, in
