@@ -12,6 +12,27 @@ endif()
 find_package(Threads REQUIRED)
 include(FetchContent)
 
+# --- Optional CUDA (GPU lattice-Boltzmann solver) ------------------------------
+# On by default when a CUDA compiler is found; without it the app builds and
+# runs as before, just without the GPU solver.
+include(CheckLanguage)
+check_language(CUDA)
+if(CMAKE_CUDA_COMPILER)
+    set(WT_CUDA_DEFAULT ON)
+else()
+    set(WT_CUDA_DEFAULT OFF)
+endif()
+option(WT_WITH_CUDA "Build the CUDA lattice-Boltzmann solver" ${WT_CUDA_DEFAULT})
+if(WT_WITH_CUDA)
+    if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+        set(CMAKE_CUDA_ARCHITECTURES 86) # Ampere (RTX 30xx); override on the command line for other GPUs
+    endif()
+    enable_language(CUDA)
+    set(CMAKE_CUDA_STANDARD 20)
+    set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+    find_package(CUDAToolkit REQUIRED)
+endif()
+
 # --- Third-party -------------------------------------------------------------
 
 set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
@@ -78,7 +99,14 @@ target_compile_options(wt_io PRIVATE ${WT_WARNINGS})
 file(GLOB_RECURSE WT_SOLVERS_SRC CONFIGURE_DEPENDS src/solvers/*.cpp)
 add_library(wt_solvers STATIC ${WT_SOLVERS_SRC})
 target_link_libraries(wt_solvers PUBLIC wt_core wt_io Threads::Threads)
-target_compile_options(wt_solvers PRIVATE ${WT_WARNINGS})
+target_compile_options(wt_solvers PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:${WT_WARNINGS}>")
+if(WT_WITH_CUDA)
+    file(GLOB_RECURSE WT_SOLVERS_CU CONFIGURE_DEPENDS src/solvers/*.cu)
+    target_sources(wt_solvers PRIVATE ${WT_SOLVERS_CU})
+    target_compile_definitions(wt_solvers PRIVATE WT_WITH_CUDA=1)
+    target_compile_options(wt_solvers PRIVATE "$<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wall,-Wextra;--expt-relaxed-constexpr;-lineinfo>")
+    target_link_libraries(wt_solvers PUBLIC CUDA::cudart)
+endif()
 
 file(GLOB_RECURSE WT_RENDER_SRC CONFIGURE_DEPENDS src/render/*.cpp)
 add_library(wt_render STATIC ${WT_RENDER_SRC})
