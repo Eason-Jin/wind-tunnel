@@ -84,7 +84,7 @@ Options parseOptions(int argc, char** argv)
             o.zoom = std::stof(parts[2]);
         } else if (a == "--help" || a == "-h") {
             throw std::runtime_error("usage: windtunnel [--stl file] [--scale s] [--up z|y|x] [--yaw deg] [--pitch deg] [--tool move|rotate] [--quality draft|normal|fine] [--field synthetic|none|openfoam:<dir>]\n"
-                                     "  [--solve openfoam] [--passes a,b] [--screenshot out.png] [--frames n] [--ui] [--play]\n"
+                                     "  [--solve openfoam|lbm] [--passes a,b] [--screenshot out.png] [--frames n] [--ui] [--play]\n"
                                      "  [--size WxH] [--camera yaw,pitch,zoom]");
         } else {
             throw std::runtime_error("Unknown option: " + a + " (try --help)");

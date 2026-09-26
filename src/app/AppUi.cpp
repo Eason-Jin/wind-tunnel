@@ -5,6 +5,7 @@
 
 #include "app/ui/Theme.h"
 #include "render/passes/SlicePass.h"
+#include "solvers/cuda/LbmSetup.h"
 #include "solvers/openfoam/OpenFoamSolver.h"
 #include "solvers/synthetic/SyntheticSolver.h"
 
@@ -35,12 +36,15 @@ struct QualityPreset {
     int gridCellsX;
     int refinementLevel;
     int iterations;
-    const char* estimate; // car-sized body, 8 cores
+    const char* estimate; // OpenFOAM, car-sized body, 8 cores
+    int lbmRefine;
+    float lbmFlowThroughs;
+    const char* lbmEstimate; // GPU solver on a laptop RTX 3050 (about 1 billion lattice updates/s)
 };
 constexpr QualityPreset kQuality[] = {
-    {"Draft", 96, 2, 250, "about 30 s"},
-    {"Normal", 128, 3, 400, "about 1 min"},
-    {"Fine", 176, 4, 600, "5-40 min"},
+    {"Draft", 96, 2, 250, "about 30 s", 2, 2.0f, "about 10 s"},
+    {"Normal", 128, 3, 400, "about 1 min", 2, 2.5f, "about 30 s"},
+    {"Fine", 176, 4, 600, "5-40 min", 2, 2.5f, "about 1-2 min"},
 };
 
 struct UnitPreset {
@@ -128,6 +132,8 @@ void App::applyQualityPreset()
     params_.gridCellsX = kQuality[quality_].gridCellsX;
     params_.refinementLevel = kQuality[quality_].refinementLevel;
     params_.iterations = kQuality[quality_].iterations;
+    params_.lbmRefine = kQuality[quality_].lbmRefine;
+    params_.lbmFlowThroughs = kQuality[quality_].lbmFlowThroughs;
 }
 
 bool App::gridMatchesField() const
@@ -145,8 +151,11 @@ bool App::needsSolve() const
     if (std::abs(fieldSpeed_ - params_.inletSpeed) > 1e-3f)
         return true;
     if (solverKind_ == SolverKind::OpenFoam)
-        return fieldIsPreview_ || fieldParams_.refinementLevel != params_.refinementLevel ||
+        return fieldIsPreview_ || fieldKind_ != solverKind_ || fieldParams_.refinementLevel != params_.refinementLevel ||
                fieldParams_.iterations != params_.iterations;
+    if (solverKind_ == SolverKind::Lbm)
+        return fieldIsPreview_ || fieldKind_ != solverKind_ || fieldParams_.lbmRefine != params_.lbmRefine ||
+               fieldParams_.lbmFlowThroughs != params_.lbmFlowThroughs;
     return false;
 }
 
@@ -156,7 +165,7 @@ void App::simulationSettingsChanged()
         previewSyntheticField(); // cheap (or cached): follow the new settings immediately
         return;
     }
-    if (needsSolve() && restoreFromCache(SolverKind::OpenFoam))
+    if (needsSolve() && restoreFromCache(isCfd(solverKind_) ? solverKind_ : fieldKind_))
         return; // these settings were already simulated
     if (needsSolve())
         status_ = "Settings changed - press Simulate to update the result (showing the previous solution)";
@@ -198,13 +207,13 @@ void App::onPlayPressed()
         previewSyntheticField();
         return;
     }
-    if (restoreFromCache(SolverKind::OpenFoam)) {
+    if (restoreFromCache(solverKind_)) {
         setPlaying(true);
         return;
     }
     playAfterSolve_ = true;
     setPlaying(false);
-    startSolver(SolverKind::OpenFoam);
+    startSolver(solverKind_);
 }
 
 void App::updateSceneRect(float displayW, float displayH, float fbScale)
@@ -385,7 +394,7 @@ void App::drawToolbar()
         if (playButton("Pause", 1, ui::colour::kAccent, ui::colour::kAccentHover, ImVec2(playW, playH)))
             onPlayPressed();
     } else {
-        const bool solve = needsSolve() && solverKind_ == SolverKind::OpenFoam;
+        const bool solve = needsSolve() && isCfd(solverKind_);
         if (playButton(solve ? "Simulate" : "Play", 0, ui::colour::kPlay, ui::colour::kPlayHover, ImVec2(playW, playH)))
             onPlayPressed();
         if (ImGui::IsItemHovered())
@@ -398,13 +407,20 @@ void App::drawToolbar()
     ImGui::SetCursorPosX(io.DisplaySize.x - solverW - 14.0f);
     centreInBar(H, frameH);
     ImGui::SetNextItemWidth(solverW);
-    int kind = static_cast<int>(solverKind_);
+    // Only the solvers this machine can run are offered.
     ImGui::BeginDisabled(cfdRunning());
-    if (ImGui::Combo("##solver", &kind, "Instant preview\0OpenFOAM CFD\0")) {
-        if (kind == 1 && !solvers::OpenFoamSolver::available())
-            status_ = "OpenFOAM not found (expected /usr/lib/openfoam/openfoam2406)";
-        else
-            solverKind_ = static_cast<SolverKind>(kind);
+    if (ImGui::BeginCombo("##solver", solverLabel(solverKind_))) {
+        for (SolverKind kind : {SolverKind::Synthetic, SolverKind::OpenFoam, SolverKind::Lbm}) {
+            if (!solverAvailable(kind))
+                continue;
+            if (ImGui::Selectable(solverLabel(kind), kind == solverKind_))
+                solverKind_ = kind;
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s", kind == SolverKind::Lbm        ? "Lattice-Boltzmann large-eddy simulation on the GPU (CUDA)"
+                                        : kind == SolverKind::OpenFoam ? "Steady RANS (k-omega SST) with OpenFOAM on the CPU"
+                                                                       : "Potential flow: instant, but no wake or vortices");
+        }
+        ImGui::EndCombo();
     }
     ImGui::EndDisabled();
 
@@ -533,7 +549,7 @@ void App::drawLeftPanel()
     ImGui::Dummy(ImVec2(0, 6));
     ui::sectionHeader("SIMULATION");
     ImGui::BeginDisabled(cfdRunning());
-    if (solverKind_ == SolverKind::OpenFoam) {
+    if (isCfd(solverKind_)) {
         ImGui::TextUnformatted("Quality");
         const char* qLabels[] = {kQuality[0].name, kQuality[1].name, kQuality[2].name};
         int q = std::min(quality_, 2);
@@ -542,7 +558,11 @@ void App::drawLeftPanel()
             applyQualityPreset();
             simulationSettingsChanged();
         }
-        if (quality_ <= 2)
+        if (quality_ <= 2 && solverKind_ == SolverKind::Lbm)
+            ui::hint("GPU run time: %s on a laptop RTX 3050 (car-sized model). Time-averaged large-eddy simulation; "
+                     "quality sets the lattice resolution.",
+                     kQuality[quality_].lbmEstimate);
+        else if (quality_ <= 2)
             ui::hint("OpenFOAM run time: %s on 8 cores. Quality changes the CFD (wake, separation, vortices); "
                      "the instant preview looks the same at every quality.",
                      kQuality[quality_].estimate);
@@ -550,7 +570,7 @@ void App::drawLeftPanel()
             ui::hint("Custom settings (see Advanced).");
     } else {
         ui::hint("Instant preview uses idealised potential flow: no wake, no vortices. "
-                 "Choose OpenFOAM CFD in the toolbar for a real simulation.");
+                 "Choose a CFD solver in the toolbar for a real simulation.");
     }
 
     if (ImGui::TreeNode("Advanced")) {
@@ -565,6 +585,21 @@ void App::drawLeftPanel()
             custom |= ImGui::SliderInt("Refinement", &params_.refinementLevel, 1, 6);
             done();
             ImGui::SliderInt("CPU cores", &params_.processors, 1, 16);
+        }
+        if (solverKind_ == SolverKind::Lbm) {
+            custom |= ImGui::SliderInt("Lattice refinement", &params_.lbmRefine, 1, 3);
+            done();
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Lattice cells per output cell along each axis (memory grows with its cube)");
+            custom |= ImGui::SliderFloat("Flow-throughs", &params_.lbmFlowThroughs, 1.0f, 6.0f, "%.1f");
+            done();
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Run length in tunnel flow-through times; the last 60%% is averaged");
+            if (!body_.empty()) {
+                const solvers::lbm::LbmPlan plan = solvers::lbm::makeLbmPlan(body_.bounds(), params_);
+                ui::hint("Lattice %d x %d x %d, %d steps, %.2f GB of GPU memory.", plan.lattice.x, plan.lattice.y,
+                         plan.lattice.z, plan.steps, static_cast<double>(plan.deviceBytes) / 1e9);
+            }
         }
         ImGui::DragFloat("Upstream (x L)", &params_.upstream, 0.05f, 0.5f, 10.0f, "%.2f");
         done();
@@ -590,6 +625,7 @@ void App::drawLeftPanel()
             try {
                 setField(solvers::loadOpenFoamResult(dirBuf));
                 fieldIsPreview_ = false;
+                fieldKind_ = SolverKind::OpenFoam;
                 fieldSpeed_ = field_.freestreamSpeed;
                 params_.inletSpeed = field_.freestreamSpeed;
                 status_ = "Loaded saved result from " + std::string(dirBuf);
@@ -606,7 +642,9 @@ void App::drawLeftPanel()
         ImGui::Dummy(ImVec2(0, 6));
         ui::sectionHeader("RESULT");
         const int u = static_cast<int>(speedUnit_);
-        ImGui::Text("%s", fieldIsPreview_ ? "Instant preview" : "OpenFOAM solution");
+        ImGui::Text("%s", fieldIsPreview_                  ? "Instant preview"
+                          : fieldKind_ == SolverKind::Lbm ? "GPU lattice-Boltzmann solution (time-averaged)"
+                                                          : "OpenFOAM solution");
         ui::hint("Solved at %.1f %s on a %d x %d x %d grid. Peak speed %.1f %s.", speedToDisplay(fieldSpeed_, u),
                  speedUnitName(u), field_.dims.x, field_.dims.y, field_.dims.z, speedToDisplay(field_.maxSpeed(), u),
                  speedUnitName(u));

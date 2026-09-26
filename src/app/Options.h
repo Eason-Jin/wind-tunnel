@@ -17,7 +17,7 @@ namespace app {
 //   --tool <move|rotate>    start with the move or rotate gizmo active
 //   --quality <draft|normal|fine>  simulation quality preset (default normal)
 //   --field <spec>          synthetic | none | openfoam:<workDir>   (default synthetic)
-//   --solve openfoam        run the OpenFOAM solver on startup (window mode)
+//   --solve <openfoam|lbm>  run the OpenFOAM or GPU (lattice-Boltzmann) solver on startup
 //   --passes <a,b,...>      enabled passes by name (case-insensitive), e.g. model,slice
 //   --screenshot <out.png>  render offscreen, save PNG, exit (no window shown)
 //   --frames <n>            frames to simulate before the screenshot (default 1)

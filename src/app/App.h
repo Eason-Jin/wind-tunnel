@@ -36,7 +36,10 @@ public:
     int run();
 
 private:
-    enum class SolverKind { Synthetic = 0, OpenFoam = 1 };
+    enum class SolverKind { Synthetic = 0, OpenFoam = 1, Lbm = 2 };
+    static bool isCfd(SolverKind kind) { return kind != SolverKind::Synthetic; }
+    static bool solverAvailable(SolverKind kind);
+    static const char* solverLabel(SolverKind kind); // e.g. for the solver menu and the result panel
 
     void initWindow();
     void initImGui();
@@ -79,7 +82,7 @@ private:
     void setPlaying(bool playing);
     void applyQualityPreset();
     render::RenderPass* findPass(const char* name) const;
-    bool cfdRunning() const { return running_ && runningKind_ == SolverKind::OpenFoam; }
+    bool cfdRunning() const { return running_ && isCfd(runningKind_); }
     void openPickedFile(const std::string& path);
 
     int runWindow();
@@ -117,6 +120,7 @@ private:
     bool playing_ = false;
     bool playAfterSolve_ = false;
     bool fieldIsPreview_ = true; // current field is the instant analytic preview
+    SolverKind fieldKind_ = SolverKind::Synthetic; // solver that produced the current field
     float fieldSpeed_ = 0.0f;    // inlet speed (m/s) the current field was computed for
     float solveSpeed_ = 0.0f;    // inlet speed of the run in flight
     core::SimulationParams fieldParams_; // settings the current field was computed with
