@@ -106,16 +106,33 @@ void main()
         vec3 pos = emitPosition(state);
         vec3 prevPos = pos;
 
-        const int kSubSteps = 8;
-        float dtSub = age / float(kSubSteps);
-        for (int s = 0; s < kSubSteps; ++s) {
+        // Walk the particle forward by its age in small steps. If it leaves
+        // the tunnel (or hits the body) on the way, it would already have
+        // respawned: restart it at the emitter with the remaining time. This
+        // keeps the initial state statistically steady instead of releasing
+        // a synchronised wave of respawns on the first frames.
+        const float kStep = 0.05; // seconds of animation time per sub-step
+        float remaining = age;
+        float localAge = 0.0;
+        for (int s = 0; s < 400 && remaining > 0.0; ++s) {
+            float h = min(kStep, remaining);
             vec3 v1 = sampleVelocity(pos);
-            vec3 mid = pos + 0.5 * dtSub * uTimeScale * v1;
+            vec3 mid = pos + 0.5 * h * uTimeScale * v1;
             vec3 v2 = sampleVelocity(mid);
+            vec3 next = pos + h * uTimeScale * v2;
+            vec3 tcNext = (next - uGridMin) / uGridSize;
+            remaining -= h;
+            localAge += h;
+            if (!insideGrid(tcNext) || isSolidAt(tcNext)) {
+                pos = emitPosition(state);
+                prevPos = pos;
+                localAge = 0.0;
+                continue;
+            }
             prevPos = pos;
-            pos = pos + dtSub * uTimeScale * v2;
+            pos = next;
         }
-
+        age = localAge;
         particles[idx].posAge = vec4(pos, age);
         particles[idx].prevLife = vec4(prevPos, lifetime);
         return;

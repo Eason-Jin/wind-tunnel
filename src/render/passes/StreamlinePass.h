@@ -35,6 +35,7 @@ public:
     void update(const FrameContext& frame) override;
     void draw(const FrameContext& frame) override;
     void drawUi() override;
+    void setPlaying(bool playing) override { dashOn_ = playing; }
 
 private:
     enum class RakeMode { Rectangular = 0, SingleLine = 1 };

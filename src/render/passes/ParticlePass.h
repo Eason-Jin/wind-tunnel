@@ -26,6 +26,7 @@ public:
     void update(const FrameContext& frame) override;
     void draw(const FrameContext& frame) override;
     void drawUi() override;
+    void setPlaying(bool playing) override { paused_ = !playing; }
 
 private:
     void reallocate(int count);
@@ -49,7 +50,7 @@ private:
     float lifetimeMin_ = 5.0f;
     float lifetimeMax_ = 10.0f;
     int emitterMode_ = 0; // 0 = inlet plane, 1 = whole domain
-    bool paused_ = false;
+    bool paused_ = true; // animated only while the toolbar Play is active
 
     // Rendering controls (UI).
     bool useStreaks_ = true;

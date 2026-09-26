@@ -52,9 +52,24 @@ private:
     void cancelSolver();
     void pollSolver(); // adopt a finished result, surface errors
 
-    void renderScene(int width, int height, float time, float dt);
-    void drawUi();
+    // Scene rendering into a sub-rectangle of the framebuffer (GL pixels, origin bottom-left).
+    void renderScene(int x, int y, int width, int height, float time, float dt);
     void handleCameraInput();
+
+    // UI (AppUi.cpp).
+    void drawUi();
+    void drawToolbar();
+    void drawLeftPanel();
+    void drawRightPanel();
+    void drawStatusBar();
+    void updateSceneRect(float displayW, float displayH, float fbScale);
+
+    // Play / solve workflow.
+    void onPlayPressed();
+    bool needsSolve() const;
+    void setPlaying(bool playing);
+    void applyQualityPreset();
+    render::RenderPass* findPass(const char* name) const;
 
     int runWindow();
     int runScreenshot();
@@ -77,6 +92,21 @@ private:
     core::SimulationParams params_;
     glm::vec3 background_{0.075f, 0.085f, 0.10f};
     std::string status_;
+
+    // Workflow state.
+    enum class SpeedUnit { Kmh = 0, Ms = 1 };
+    SpeedUnit speedUnit_ = SpeedUnit::Kmh;
+    bool playing_ = false;
+    bool playAfterSolve_ = false;
+    bool fieldIsPreview_ = true; // current field is the instant analytic preview
+    float fieldSpeed_ = 0.0f;    // inlet speed (m/s) the current field was computed for
+    float solveSpeed_ = 0.0f;    // inlet speed of the run in flight
+    bool layersShownOnPlay_ = false;
+    int quality_ = 1;            // 0 draft, 1 normal, 2 fine, 3 custom
+    int unitsPreset_ = 0;        // STL units: m, cm, mm, in
+    struct Rect {
+        int x = 0, y = 0, w = 1, h = 1;
+    } sceneRect_;                // GL pixels
 
     // Solver state shared with the worker thread.
     struct SolverState {

@@ -1,5 +1,7 @@
 #include "app/App.h"
 
+#include "app/ui/Theme.h"
+
 #include "core/TunnelDomain.h"
 #include "io/StlLoader.h"
 #include "render/passes/DomainPass.h"
@@ -64,6 +66,8 @@ App::App(Options options) : options_(std::move(options))
     params_.workDir = std::filesystem::path(WT_PROJECT_DIR) / "cases" / "run";
     // OpenFOAM scales with physical cores; hardware_concurrency counts SMT threads.
     params_.processors = static_cast<int>(std::clamp(std::thread::hardware_concurrency() / 2u, 1u, 8u));
+    params_.inletSpeed = 100.0f / 3.6f; // 100 km/h
+    applyQualityPreset();
     initWindow();
     if (!options_.screenshot || options_.showUi)
         initImGui();
@@ -76,9 +80,12 @@ App::App(Options options) : options_(std::move(options))
 
     const std::string& f = options_.field;
     if (f == "synthetic") {
-        setField(solvers::makeSyntheticField(body_, params_));
+        previewSyntheticField();
     } else if (f.rfind("openfoam:", 0) == 0) {
         setField(solvers::loadOpenFoamResult(f.substr(9)));
+        fieldIsPreview_ = false;
+        fieldSpeed_ = field_.freestreamSpeed;
+        params_.inletSpeed = field_.freestreamSpeed;
     } else if (f != "none") {
         throw std::runtime_error("Unknown --field value: " + f);
     }
@@ -90,6 +97,7 @@ App::App(Options options) : options_(std::move(options))
         camera_.pitch = glm::radians(*options_.pitchDeg);
     camera_.zoom(1.0f / std::max(options_.zoom, 1e-3f));
 
+    solverKind_ = solvers::OpenFoamSolver::available() ? SolverKind::OpenFoam : SolverKind::Synthetic;
     if (options_.solve) {
         if (lower(*options_.solve) == "openfoam")
             solverKind_ = SolverKind::OpenFoam;
@@ -156,6 +164,8 @@ void App::initWindow()
             glfwSetWindowShouldClose(w, GLFW_TRUE);
         if (key == GLFW_KEY_F && action == GLFW_PRESS)
             app->frameCamera();
+        if (key == GLFW_KEY_SPACE && action == GLFW_PRESS)
+            app->onPlayPressed();
     });
 }
 
@@ -164,8 +174,7 @@ void App::initImGui()
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    ImGui::StyleColorsDark();
-    ImGui::GetStyle().WindowRounding = 4.0f;
+    ui::applyTheme();
     // Installs callbacks that chain to the scroll/key callbacks set above.
     ImGui_ImplGlfw_InitForOpenGL(window_, true);
     ImGui_ImplOpenGL3_Init("#version 460");
@@ -234,7 +243,8 @@ void App::applyBodyTransform()
 void App::previewSyntheticField()
 {
     setField(solvers::makeSyntheticField(body_, params_));
-    status_ += " - showing instant potential-flow preview; press Run for a real solution";
+    fieldIsPreview_ = true;
+    fieldSpeed_ = params_.inletSpeed;
 }
 
 void App::setField(core::FlowField field)
@@ -287,6 +297,7 @@ void App::startSolver(SolverKind kind)
     }
     cancel_ = false;
     running_ = true;
+    solveSpeed_ = params_.inletSpeed;
     status_ = "Running " + solver_->name();
 
     worker_ = std::thread([this, body = body_, params = params_]() {
@@ -336,8 +347,10 @@ void App::pollSolver()
     }
     if (worker_.joinable())
         worker_.join();
+    const bool play = playAfterSolve_;
+    playAfterSolve_ = false;
     if (!error.empty()) {
-        status_ = "Solver: " + error;
+        status_ = error == "Cancelled" ? "Simulation cancelled" : "Simulation failed: " + error;
         std::cerr << status_ << '\n';
         return;
     }
@@ -346,15 +359,19 @@ void App::pollSolver()
         return;
     }
     setField(std::move(result));
-    status_ = "Solution ready (" + std::to_string(field_.dims.x) + "x" + std::to_string(field_.dims.y) + "x" +
-              std::to_string(field_.dims.z) + ")";
+    fieldIsPreview_ = solverKind_ == SolverKind::Synthetic;
+    fieldSpeed_ = solveSpeed_;
+    status_ = "Simulation finished";
+    if (play)
+        setPlaying(true);
 }
 
-void App::renderScene(int width, int height, float time, float dt)
+void App::renderScene(int x, int y, int width, int height, float time, float dt)
 {
-    glViewport(0, 0, width, height);
+    glDisable(GL_SCISSOR_TEST);
     glClearColor(background_.r, background_.g, background_.b, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glViewport(x, y, width, height);
     glEnable(GL_DEPTH_TEST);
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
@@ -401,6 +418,13 @@ void App::handleCameraInput()
     if (!dragging_) {
         if (ImGui::GetIO().WantCaptureMouse)
             return;
+        int fbw = 0, fbh = 0, ww = 0, wh = 0;
+        glfwGetFramebufferSize(window_, &fbw, &fbh);
+        glfwGetWindowSize(window_, &ww, &wh);
+        const double sx = ww > 0 ? static_cast<double>(fbw) / ww : 1.0;
+        const double px = cursor.x * sx, py = fbh - cursor.y * sx; // GL pixels, bottom-left origin
+        if (px < sceneRect_.x || px > sceneRect_.x + sceneRect_.w || py < sceneRect_.y || py > sceneRect_.y + sceneRect_.h)
+            return;
         dragging_ = true;
         return;
     }
@@ -412,141 +436,15 @@ void App::handleCameraInput()
         camera_.pan(delta, static_cast<float>(fbh));
 }
 
-void App::drawUi()
-{
-    ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(380, 0), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Wind Tunnel");
-
-    if (ImGui::CollapsingHeader("Body", ImGuiTreeNodeFlags_DefaultOpen)) {
-        static char pathBuf[1024] = "";
-        static bool initPath = false;
-        if (!initPath) {
-            std::snprintf(pathBuf, sizeof pathBuf, "%s", bodyPath_.c_str());
-            initPath = true;
-        }
-        ImGui::InputText("STL file", pathBuf, sizeof pathBuf);
-        static float scale = 1.0f;
-        ImGui::InputFloat("Scale to metres", &scale, 0.0f, 0.0f, "%.4g");
-        ImGui::BeginDisabled(running_);
-        if (ImGui::Button("Load")) {
-            if (loadBody(pathBuf, scale)) {
-                previewSyntheticField();
-                frameCamera();
-            }
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Test sphere")) {
-            pathBuf[0] = '\0';
-            if (loadBody("", 1.0f)) {
-                previewSyntheticField();
-                frameCamera();
-            }
-        }
-        bool reorient = ImGui::Combo("Up axis in file", &upAxis_, "+Z\0+Y\0+X\0");
-        reorient |= ImGui::Combo("Turn about up", &yawSteps_, "0 deg\0" "90 deg\0" "180 deg\0" "270 deg\0");
-        if (reorient) {
-            applyBodyTransform();
-            previewSyntheticField();
-            frameCamera();
-        }
-        ImGui::EndDisabled();
-        ImGui::TextDisabled("Flow is along +X (arrow at the inlet)");
-        const glm::vec3 s = body_.bounds().size();
-        ImGui::Text("%zu triangles, %.3g x %.3g x %.3g m", body_.triangleCount(), s.x, s.y, s.z);
-    }
-
-    if (ImGui::CollapsingHeader("Simulation", ImGuiTreeNodeFlags_DefaultOpen)) {
-        int kind = static_cast<int>(solverKind_);
-        const bool foamOk = solvers::OpenFoamSolver::available();
-        ImGui::BeginDisabled(running_);
-        ImGui::Combo("Solver", &kind, "Synthetic (instant)\0OpenFOAM simpleFoam\0");
-        solverKind_ = static_cast<SolverKind>(kind);
-        if (solverKind_ == SolverKind::OpenFoam && !foamOk)
-            ImGui::TextColored(ImVec4(1, 0.6f, 0.3f, 1), "OpenFOAM not found (expected /usr/lib/openfoam/openfoam2406)");
-        ImGui::DragFloat("Inlet speed (m/s)", &params_.inletSpeed, 0.1f, 0.1f, 200.0f, "%.1f");
-        ImGui::SliderInt("Grid cells (x)", &params_.gridCellsX, 32, 256);
-        ImGui::DragFloat("Upstream (L)", &params_.upstream, 0.05f, 0.5f, 10.0f, "%.2f");
-        ImGui::DragFloat("Downstream (L)", &params_.downstream, 0.05f, 1.0f, 20.0f, "%.2f");
-        ImGui::DragFloat("Side clearance (L)", &params_.side, 0.05f, 0.5f, 10.0f, "%.2f");
-        ImGui::Checkbox("Body on tunnel floor", &params_.groundPlane);
-        if (solverKind_ == SolverKind::OpenFoam) {
-            ImGui::SliderInt("Iterations", &params_.iterations, 50, 3000);
-            ImGui::SliderInt("Refinement level", &params_.refinementLevel, 1, 6);
-            ImGui::SliderInt("Processors", &params_.processors, 1, 16);
-        }
-        ImGui::EndDisabled();
-
-        if (!running_) {
-            ImGui::BeginDisabled(solverKind_ == SolverKind::OpenFoam && !foamOk);
-            if (ImGui::Button("Run"))
-                startSolver(solverKind_);
-            ImGui::EndDisabled();
-        } else {
-            if (ImGui::Button("Cancel"))
-                cancel_ = true;
-            core::SolverProgress p;
-            {
-                std::lock_guard lock(solverState_.mutex);
-                p = solverState_.progress;
-            }
-            ImGui::ProgressBar(p.fraction, ImVec2(-1, 0), p.stage.c_str());
-            ImGui::TextWrapped("%s", p.message.c_str());
-        }
-
-        static char dirBuf[1024] = "";
-        static bool initDir = false;
-        if (!initDir) {
-            std::snprintf(dirBuf, sizeof dirBuf, "%s", params_.workDir.string().c_str());
-            initDir = true;
-        }
-        ImGui::InputText("Case dir", dirBuf, sizeof dirBuf);
-        params_.workDir = dirBuf;
-        ImGui::BeginDisabled(running_);
-        if (ImGui::Button("Open existing OpenFOAM result")) {
-            try {
-                setField(solvers::loadOpenFoamResult(dirBuf));
-                status_ = "Loaded result from " + std::string(dirBuf);
-            } catch (const std::exception& e) {
-                status_ = std::string("Open failed: ") + e.what();
-            }
-        }
-        ImGui::EndDisabled();
-    }
-
-    if (ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::ColorEdit3("Background", &background_.x);
-        for (auto& p : passes_) {
-            ImGui::PushID(p.get());
-            ImGui::Checkbox("##on", &p->enabled);
-            ImGui::SameLine();
-            if (ImGui::TreeNode(p->name())) {
-                p->drawUi();
-                ImGui::TreePop();
-            }
-            ImGui::PopID();
-        }
-    }
-
-    ImGui::Separator();
-    if (!field_.empty()) {
-        float pmin = 0, pmax = 0;
-        field_.pressureRange(pmin, pmax);
-        ImGui::Text("Field %dx%dx%d, max |U| %.2f m/s, p %.1f..%.1f m2/s2", field_.dims.x, field_.dims.y, field_.dims.z,
-                    field_.maxSpeed(), pmin, pmax);
-    } else {
-        ImGui::TextDisabled("No flow field (press Run)");
-    }
-    ImGui::TextWrapped("%s", status_.c_str());
-    ImGui::TextDisabled("%.0f FPS | LMB orbit, RMB pan, wheel zoom, F frame", ImGui::GetIO().Framerate);
-    ImGui::End();
-}
-
 int App::runWindow()
 {
     glfwShowWindow(window_);
-    if (options_.solve)
+    if (options_.solve) {
+        playAfterSolve_ = options_.play;
         startSolver(solverKind_);
+    } else if (options_.play) {
+        setPlaying(true);
+    }
     double last = glfwGetTime();
     while (!glfwWindowShouldClose(window_)) {
         glfwPollEvents();
@@ -566,7 +464,7 @@ int App::runWindow()
         int w = 0, h = 0;
         glfwGetFramebufferSize(window_, &w, &h);
         if (w > 0 && h > 0) {
-            renderScene(w, h, static_cast<float>(now), dt);
+            renderScene(sceneRect_.x, sceneRect_.y, sceneRect_.w, sceneRect_.h, static_cast<float>(now), dt);
             ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         }
         glfwSwapBuffers(window_);
@@ -576,7 +474,10 @@ int App::runWindow()
 
 int App::runScreenshot()
 {
+    if (options_.play && !options_.solve)
+        setPlaying(true);
     if (options_.solve) {
+        playAfterSolve_ = options_.play;
         startSolver(solverKind_);
         std::string lastMsg;
         while (running_) {
@@ -613,7 +514,7 @@ int App::runScreenshot()
     for (int i = 0; i < options_.frames; ++i) {
         const float t = static_cast<float>(i) * dt;
         if (!options_.showUi) {
-            renderScene(w, h, t, dt);
+            renderScene(0, 0, w, h, t, dt);
             continue;
         }
         // Drive ImGui exactly like the window loop so the panels are laid out.
@@ -624,7 +525,7 @@ int App::runScreenshot()
         ImGui::NewFrame();
         drawUi();
         ImGui::Render();
-        renderScene(w, h, t, dt);
+        renderScene(sceneRect_.x, sceneRect_.y, sceneRect_.w, sceneRect_.h, t, dt);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     }
     glBlitNamedFramebuffer(fbo[0], fbo[1], 0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
