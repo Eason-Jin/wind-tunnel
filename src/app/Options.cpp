@@ -1,6 +1,7 @@
 #include "app/Options.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <sstream>
 #include <stdexcept>
@@ -36,6 +37,18 @@ Options parseOptions(int argc, char** argv)
             o.stlPath = need(i);
         else if (a == "--scale")
             o.stlScale = std::stof(need(i));
+        else if (a == "--up") {
+            const std::string v = need(i);
+            if (v == "z" || v == "Z")
+                o.upAxis = 0;
+            else if (v == "y" || v == "Y")
+                o.upAxis = 1;
+            else if (v == "x" || v == "X")
+                o.upAxis = 2;
+            else
+                throw std::runtime_error("--up expects z, y or x");
+        } else if (a == "--yaw")
+            o.yawSteps = ((static_cast<int>(std::lround(std::stof(need(i)) / 90.0f)) % 4) + 4) % 4;
         else if (a == "--field")
             o.field = need(i);
         else if (a == "--solve")
@@ -58,7 +71,7 @@ Options parseOptions(int argc, char** argv)
             o.pitchDeg = std::stof(parts[1]);
             o.zoom = std::stof(parts[2]);
         } else if (a == "--help" || a == "-h") {
-            throw std::runtime_error("usage: windtunnel [--stl file] [--scale s] [--field synthetic|none|openfoam:<dir>]\n"
+            throw std::runtime_error("usage: windtunnel [--stl file] [--scale s] [--up z|y|x] [--yaw deg] [--field synthetic|none|openfoam:<dir>]\n"
                                      "  [--solve openfoam] [--passes a,b] [--screenshot out.png] [--frames n]\n"
                                      "  [--size WxH] [--camera yaw,pitch,zoom]");
         } else {

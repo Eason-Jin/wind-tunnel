@@ -3,6 +3,7 @@
 #include "render/Colormap.h"
 #include "render/RenderPass.h"
 #include "render/gl/GlObjects.h"
+#include "render/gl/Shader.h"
 
 #include <glm/glm.hpp>
 
@@ -81,10 +82,9 @@ private:
     int lineCount_ = 0;
     float traceTimeMs_ = 0.0f;
 
-    // GPU: a vertex+geometry+fragment program (gl::Shader only supports
-    // vert+frag, see StreamlinePass.cpp), plus one VAO/VBO holding every
+    // GPU: vertex+geometry+fragment program, plus one VAO/VBO holding every
     // traced segment as an independent GL_LINES pair.
-    GLuint program_ = 0;
+    gl::Shader shader_;
     gl::VertexArray vao_;
     gl::Buffer vbo_;
     int vertexCount_ = 0; // 2 per segment

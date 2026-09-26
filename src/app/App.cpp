@@ -67,6 +67,8 @@ App::App(Options options) : options_(std::move(options))
         initImGui();
     createPasses();
 
+    upAxis_ = options_.upAxis;
+    yawSteps_ = options_.yawSteps;
     if (!loadBody(options_.stlPath.value_or(""), options_.stlScale))
         throw std::runtime_error(status_);
 
@@ -183,18 +185,13 @@ void App::createPasses()
 bool App::loadBody(const std::string& path, float scale)
 {
     try {
-        core::SurfaceMesh mesh = path.empty() ? core::makeSphereMesh(glm::vec3(0.0f, 0.0f, 0.5f), 0.5f) : io::loadStl(path);
+        core::SurfaceMesh mesh = path.empty() ? core::makeSphereMesh(glm::vec3(0.0f), 0.5f) : io::loadStl(path);
         if (mesh.empty())
             throw std::runtime_error("mesh has no triangles");
-        if (!path.empty() && scale != 1.0f)
-            mesh.transform(scale, glm::vec3(0.0f));
-        body_ = std::move(mesh);
+        rawBody_ = std::move(mesh);
         bodyPath_ = path;
-        bodyScale_ = scale;
-        field_ = core::FlowField{};
-        flowTextures_.clear();
-        notifyBody();
-        notifyField();
+        bodyScale_ = path.empty() ? 1.0f : scale;
+        applyBodyTransform();
         status_ = "Loaded " + (path.empty() ? std::string("test sphere") : path) + " (" +
                   std::to_string(body_.triangleCount()) + " triangles)";
         return true;
@@ -203,6 +200,37 @@ bool App::loadBody(const std::string& path, float scale)
         std::cerr << status_ << '\n';
         return false;
     }
+}
+
+void App::applyBodyTransform()
+{
+    core::SurfaceMesh mesh = rawBody_;
+    for (auto& p : mesh.positions) {
+        glm::vec3 q = p * bodyScale_;
+        if (upAxis_ == 1) // +y up -> +z up
+            q = {q.x, -q.z, q.y};
+        else if (upAxis_ == 2) // +x up -> +z up
+            q = {-q.z, q.y, q.x};
+        for (int i = 0; i < yawSteps_; ++i) // quarter turns about +z
+            q = {-q.y, q.x, q.z};
+        p = q;
+    }
+    // Centre in x/y and stand the body on the tunnel floor (z = 0).
+    const core::Bounds b = mesh.bounds();
+    mesh.transform(1.0f, glm::vec3(-b.centre().x, -b.centre().y, -b.min.z));
+    mesh.computeFaceNormals();
+
+    body_ = std::move(mesh);
+    field_ = core::FlowField{};
+    flowTextures_.clear();
+    notifyBody();
+    notifyField();
+}
+
+void App::previewSyntheticField()
+{
+    setField(solvers::makeSyntheticField(body_, params_));
+    status_ += " - showing instant potential-flow preview; press Run for a real solution";
 }
 
 void App::setField(core::FlowField field)
@@ -398,16 +426,28 @@ void App::drawUi()
         ImGui::InputFloat("Scale to metres", &scale, 0.0f, 0.0f, "%.4g");
         ImGui::BeginDisabled(running_);
         if (ImGui::Button("Load")) {
-            if (loadBody(pathBuf, scale))
+            if (loadBody(pathBuf, scale)) {
+                previewSyntheticField();
                 frameCamera();
+            }
         }
         ImGui::SameLine();
         if (ImGui::Button("Test sphere")) {
             pathBuf[0] = '\0';
-            if (loadBody("", 1.0f))
+            if (loadBody("", 1.0f)) {
+                previewSyntheticField();
                 frameCamera();
+            }
+        }
+        bool reorient = ImGui::Combo("Up axis in file", &upAxis_, "+Z\0+Y\0+X\0");
+        reorient |= ImGui::Combo("Turn about up", &yawSteps_, "0 deg\0" "90 deg\0" "180 deg\0" "270 deg\0");
+        if (reorient) {
+            applyBodyTransform();
+            previewSyntheticField();
+            frameCamera();
         }
         ImGui::EndDisabled();
+        ImGui::TextDisabled("Flow is along +X (arrow at the inlet)");
         const glm::vec3 s = body_.bounds().size();
         ImGui::Text("%zu triangles, %.3g x %.3g x %.3g m", body_.triangleCount(), s.x, s.y, s.z);
     }

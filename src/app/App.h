@@ -40,6 +40,8 @@ private:
 
     // Scene changes (main thread only).
     bool loadBody(const std::string& path, float scale); // empty path = test sphere
+    void applyBodyTransform(); // rawBody_ -> body_ (scale, orientation, placed on the floor)
+    void previewSyntheticField();
     void setField(core::FlowField field);
     void notifyBody();
     void notifyField();
@@ -66,7 +68,10 @@ private:
 
     std::string bodyPath_;
     float bodyScale_ = 1.0f;
-    core::SurfaceMesh body_; // metres
+    core::SurfaceMesh rawBody_; // as loaded from the STL
+    core::SurfaceMesh body_;    // metres, oriented (+x flow, +z up), centred in y, on z = 0
+    int upAxis_ = 0;            // see Options::upAxis
+    int yawSteps_ = 0;          // quarter turns about +z
     core::FlowField field_;
     render::FlowTextures flowTextures_;
     core::SimulationParams params_;

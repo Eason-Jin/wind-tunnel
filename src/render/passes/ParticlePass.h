@@ -46,8 +46,8 @@ private:
 
     // Simulation controls (UI).
     float timeScale_ = 0.1f;
-    float lifetimeMin_ = 2.0f;
-    float lifetimeMax_ = 6.0f;
+    float lifetimeMin_ = 5.0f;
+    float lifetimeMax_ = 10.0f;
     int emitterMode_ = 0; // 0 = inlet plane, 1 = whole domain
     bool paused_ = false;
 

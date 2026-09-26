@@ -14,6 +14,7 @@ class Shader {
 public:
     Shader() = default;
     static Shader fromFiles(const std::string& vertFile, const std::string& fragFile);
+    static Shader fromFiles(const std::string& vertFile, const std::string& geomFile, const std::string& fragFile);
     static Shader computeFromFile(const std::string& compFile);
 
     ~Shader();

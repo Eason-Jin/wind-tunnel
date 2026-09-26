@@ -86,6 +86,21 @@ Shader Shader::fromFiles(const std::string& vertFile, const std::string& fragFil
     return Shader(link({vs, fs}, vertFile + " + " + fragFile));
 }
 
+Shader Shader::fromFiles(const std::string& vertFile, const std::string& geomFile, const std::string& fragFile)
+{
+    std::vector<GLuint> compiled;
+    try {
+        compiled.push_back(compile(GL_VERTEX_SHADER, vertFile));
+        compiled.push_back(compile(GL_GEOMETRY_SHADER, geomFile));
+        compiled.push_back(compile(GL_FRAGMENT_SHADER, fragFile));
+    } catch (...) {
+        for (GLuint s : compiled)
+            glDeleteShader(s);
+        throw;
+    }
+    return Shader(link({compiled[0], compiled[1], compiled[2]}, vertFile + " + " + geomFile + " + " + fragFile));
+}
+
 Shader Shader::computeFromFile(const std::string& compFile)
 {
     return Shader(link({compile(GL_COMPUTE_SHADER, compFile)}, compFile));

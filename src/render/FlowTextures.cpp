@@ -39,8 +39,10 @@ void FlowTextures::upload(const core::FlowField& field)
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glTextureSubImage3D(solid_.id(), 0, 0, 0, 0, dims_.x, dims_.y, dims_.z, GL_RED, GL_UNSIGNED_BYTE, solid.data());
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-    glTextureParameteri(solid_.id(), GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTextureParameteri(solid_.id(), GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    // Linear filtering: shaders threshold at 0.5, which gives a smooth body
+    // outline instead of a voxel staircase.
+    glTextureParameteri(solid_.id(), GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTextureParameteri(solid_.id(), GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     for (GLenum wrap : {GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_T, GL_TEXTURE_WRAP_R})
         glTextureParameteri(solid_.id(), wrap, GL_CLAMP_TO_EDGE);
 }

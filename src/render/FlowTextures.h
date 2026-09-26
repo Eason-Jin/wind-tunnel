@@ -8,7 +8,7 @@ namespace render {
 
 // GPU copy of a FlowField, shared by all passes:
 //   flow  : 3D RGBA32F, rgb = velocity (m/s), a = kinematic pressure; linear filtering
-//   solid : 3D R8, 1 inside the body; nearest filtering
+//   solid : 3D R8, 1 inside the body; linear filtering (threshold at 0.5)
 // Texture coordinates for a world position p: (p - boundsMin) / boundsSize
 // (see setUniforms / FlowField::toTexCoord).
 class FlowTextures {

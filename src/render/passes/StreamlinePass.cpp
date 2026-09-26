@@ -1,107 +1,17 @@
 #include "render/passes/StreamlinePass.h"
 
-#include "render/gl/Shader.h" // for gl::shaderPath()
-
-#include <glm/gtc/type_ptr.hpp>
-
 #include <imgui.h>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
-#include <fstream>
-#include <sstream>
-#include <stdexcept>
 #include <thread>
 #include <vector>
 
 namespace render {
 
 namespace {
-
-// --- Minimal vertex+geometry+fragment program, local to this pass ----------
-// render::gl::Shader (see src/render/gl/Shader.h) only builds vertex+fragment
-// programs, so the ribbon-expanding geometry shader here is compiled and
-// linked by hand. See the report for a suggested Shader::fromFiles overload
-// that would let this go away.
-
-std::string readShaderFile(const std::string& file)
-{
-    const std::string path = gl::shaderPath(file);
-    std::ifstream in(path);
-    if (!in)
-        throw std::runtime_error("Cannot open shader file: " + path);
-    std::stringstream ss;
-    ss << in.rdbuf();
-    return ss.str();
-}
-
-GLuint compileStage(GLenum stage, const std::string& file)
-{
-    const std::string src = readShaderFile(file);
-    const char* ptr = src.c_str();
-    const GLuint s = glCreateShader(stage);
-    glShaderSource(s, 1, &ptr, nullptr);
-    glCompileShader(s);
-    GLint ok = 0;
-    glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
-    if (!ok) {
-        GLint len = 0;
-        glGetShaderiv(s, GL_INFO_LOG_LENGTH, &len);
-        std::vector<char> log(static_cast<std::size_t>(len) + 1, '\0');
-        glGetShaderInfoLog(s, len, nullptr, log.data());
-        glDeleteShader(s);
-        throw std::runtime_error("Shader compile failed (" + file + "):\n" + log.data());
-    }
-    return s;
-}
-
-GLuint linkStreamlineProgram()
-{
-    const GLuint vs = compileStage(GL_VERTEX_SHADER, "streamline.vert");
-    const GLuint gs = compileStage(GL_GEOMETRY_SHADER, "streamline.geom");
-    const GLuint fs = compileStage(GL_FRAGMENT_SHADER, "streamline.frag");
-
-    const GLuint p = glCreateProgram();
-    glAttachShader(p, vs);
-    glAttachShader(p, gs);
-    glAttachShader(p, fs);
-    glLinkProgram(p);
-    glDetachShader(p, vs);
-    glDetachShader(p, gs);
-    glDetachShader(p, fs);
-    glDeleteShader(vs);
-    glDeleteShader(gs);
-    glDeleteShader(fs);
-
-    GLint ok = 0;
-    glGetProgramiv(p, GL_LINK_STATUS, &ok);
-    if (!ok) {
-        GLint len = 0;
-        glGetProgramiv(p, GL_INFO_LOG_LENGTH, &len);
-        std::vector<char> log(static_cast<std::size_t>(len) + 1, '\0');
-        glGetProgramInfoLog(p, len, nullptr, log.data());
-        glDeleteProgram(p);
-        throw std::runtime_error("Streamline program link failed:\n" + std::string(log.data()));
-    }
-    return p;
-}
-
-void setUniform(GLuint program, const char* name, int v) { glProgramUniform1i(program, glGetUniformLocation(program, name), v); }
-void setUniform(GLuint program, const char* name, float v) { glProgramUniform1f(program, glGetUniformLocation(program, name), v); }
-void setUniform(GLuint program, const char* name, const glm::vec2& v)
-{
-    glProgramUniform2fv(program, glGetUniformLocation(program, name), 1, glm::value_ptr(v));
-}
-void setUniform(GLuint program, const char* name, const glm::vec3& v)
-{
-    glProgramUniform3fv(program, glGetUniformLocation(program, name), 1, glm::value_ptr(v));
-}
-void setUniform(GLuint program, const char* name, const glm::mat4& v)
-{
-    glProgramUniformMatrix4fv(program, glGetUniformLocation(program, name), 1, GL_FALSE, glm::value_ptr(v));
-}
 
 // --- CPU tracing -------------------------------------------------------------
 
@@ -147,9 +57,8 @@ std::vector<StreamlinePoint> traceOne(const core::FlowField& field, const glm::v
 
 } // namespace
 
-StreamlinePass::StreamlinePass()
+StreamlinePass::StreamlinePass() : shader_(gl::Shader::fromFiles("streamline.vert", "streamline.geom", "streamline.frag"))
 {
-    program_ = linkStreamlineProgram();
     vao_ = gl::createVertexArray();
     vbo_ = gl::createBuffer();
 
@@ -165,11 +74,7 @@ StreamlinePass::StreamlinePass()
     glVertexArrayAttribBinding(vao_.id(), 2, 0);
 }
 
-StreamlinePass::~StreamlinePass()
-{
-    if (program_)
-        glDeleteProgram(program_);
-}
+StreamlinePass::~StreamlinePass() = default;
 
 void StreamlinePass::computeDefaults()
 {
@@ -338,25 +243,25 @@ void StreamlinePass::update(const FrameContext&)
 
 void StreamlinePass::draw(const FrameContext& frame)
 {
-    if (vertexCount_ == 0 || !program_)
+    if (vertexCount_ == 0)
         return;
 
-    setUniform(program_, "uViewProj", frame.proj * frame.view);
-    setUniform(program_, "uViewport", glm::vec2(frame.viewport));
-    setUniform(program_, "uWidthPx", lineWidthPx_);
-    setUniform(program_, "uColorMode", colorMode_);
-    setUniform(program_, "uSolidColour", solidColour_);
-    setUniform(program_, "uSpeedMin", speedMin_);
-    setUniform(program_, "uSpeedMax", speedMax_);
-    setUniform(program_, "uDashOn", dashOn_ ? 1 : 0);
-    setUniform(program_, "uDashFreq", dashFreq_);
-    setUniform(program_, "uDashSpeed", dashSpeed_);
-    setUniform(program_, "uTime", frame.time);
+    shader_.set("uViewProj", frame.proj * frame.view);
+    shader_.set("uViewport", glm::vec2(frame.viewport));
+    shader_.set("uWidthPx", lineWidthPx_);
+    shader_.set("uColorMode", colorMode_);
+    shader_.set("uSolidColour", solidColour_);
+    shader_.set("uSpeedMin", speedMin_);
+    shader_.set("uSpeedMax", speedMax_);
+    shader_.set("uDashOn", dashOn_ ? 1 : 0);
+    shader_.set("uDashFreq", dashFreq_);
+    shader_.set("uDashSpeed", dashSpeed_);
+    shader_.set("uTime", frame.time);
 
     colormap_.bind(4);
-    setUniform(program_, "uColormap", 4);
+    shader_.set("uColormap", 4);
 
-    glUseProgram(program_);
+    shader_.use();
     glBindVertexArray(vao_.id());
     glDrawArrays(GL_LINES, 0, vertexCount_);
 }
