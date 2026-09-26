@@ -11,8 +11,11 @@ TunnelDomain makeTunnelDomain(const Bounds& body, const SimulationParams& params
     const float L = std::max({size.x, size.y, size.z, 1e-6f});
 
     TunnelDomain d;
+    // The tunnel floor is the plane z = 0. A body on the floor touches it; a
+    // raised body keeps its ground clearance (or gets a sliver of gap if it
+    // was left at z = 0 without being on the floor).
     d.box.min = {body.min.x - params.upstream * L, body.min.y - params.side * L,
-                 params.groundPlane ? body.min.z : body.min.z - params.side * L};
+                 params.groundPlane ? body.min.z : std::min(0.0f, body.min.z - 0.05f * L)};
     d.box.max = {body.max.x + params.downstream * L, body.max.y + params.side * L, body.max.z + params.side * L};
 
     const glm::vec3 extent = d.box.size();

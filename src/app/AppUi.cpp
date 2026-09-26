@@ -9,6 +9,11 @@
 #include "solvers/synthetic/SyntheticSolver.h"
 
 #include <imgui.h>
+#include <ImGuizmo.h>
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
+#include <glm/gtx/euler_angles.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -22,6 +27,8 @@ namespace {
 
 constexpr ImGuiWindowFlags kPanelFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                                          ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus;
+// Side panels may outgrow short windows: allow a (thin, themed) scrollbar.
+constexpr ImGuiWindowFlags kSidePanelFlags = kPanelFlags & ~ImGuiWindowFlags_NoScrollbar;
 
 struct QualityPreset {
     const char* name;
@@ -203,6 +210,7 @@ void App::drawUi()
     drawLeftPanel();
     drawRightPanel();
     drawStatusBar();
+    drawGizmo();
 
     // View cube in the top-right corner of the 3D view.
     const float cubeSize = 140.0f;
@@ -211,6 +219,57 @@ void App::drawUi()
     const ui::ViewCubeResult cube = viewCube_.draw(cubeCentre, cubeSize, camera_.yaw, camera_.pitch);
     if (cube.clicked)
         camera_.flyTo(cube.yaw, cube.pitch);
+}
+
+void App::drawGizmo()
+{
+    ImGuizmo::BeginFrame();
+    if (gizmo_ == Gizmo::None || body_.empty() || cfdRunning()) {
+        gizmoWasUsing_ = false;
+        return;
+    }
+    const ImGuiIO& io = ImGui::GetIO();
+    const float x = ui::kLeftPanelWidth, y = ui::kToolbarHeight;
+    const float w = io.DisplaySize.x - ui::kLeftPanelWidth - ui::kRightPanelWidth;
+    const float h = io.DisplaySize.y - ui::kToolbarHeight - ui::kStatusHeight;
+    ImGuizmo::SetOrthographic(false);
+    ImGuizmo::SetDrawlist(ImGui::GetBackgroundDrawList());
+    ImGuizmo::SetRect(x, y, w, h);
+
+    const glm::vec3 centre = body_.bounds().centre();
+    const glm::mat4 R = glm::eulerAngleZYX(glm::radians(bodyRotation_.z), glm::radians(bodyRotation_.y),
+                                           glm::radians(bodyRotation_.x));
+    glm::mat4 model = glm::translate(glm::mat4(1.0f), centre) * R;
+    const glm::mat4 view = camera_.view();
+    const glm::mat4 proj = camera_.projection(w / std::max(h, 1.0f));
+
+    const bool ctrl = io.KeyCtrl;
+    const float rotateSnap[3] = {15.0f, 15.0f, 15.0f};
+    const ImGuizmo::OPERATION op = gizmo_ == Gizmo::Move
+                                       ? (params_.groundPlane ? ImGuizmo::TRANSLATE_X | ImGuizmo::TRANSLATE_Y : ImGuizmo::TRANSLATE)
+                                       : ImGuizmo::ROTATE;
+    ImGuizmo::SetGizmoSizeClipSpace(0.18f);
+    if (ImGuizmo::Manipulate(glm::value_ptr(view), glm::value_ptr(proj), op, ImGuizmo::WORLD, glm::value_ptr(model),
+                             nullptr, ctrl && gizmo_ == Gizmo::Rotate ? rotateSnap : nullptr)) {
+        const glm::vec3 moved = glm::vec3(model[3]) - centre;
+        if (gizmo_ == Gizmo::Move) {
+            bodyPosition_ += glm::vec2(moved);
+            if (!params_.groundPlane)
+                bodyHeight_ = std::max(bodyHeight_ + moved.z, 0.0f);
+        } else {
+            glm::mat3 r(model);
+            for (int c = 0; c < 3; ++c)
+                r[c] = glm::normalize(r[c]);
+            float ez = 0, ey = 0, ex = 0;
+            glm::extractEulerAngleZYX(glm::mat4(r), ez, ey, ex);
+            bodyRotation_ = glm::degrees(glm::vec3(ex, ey, ez));
+        }
+        bodyTransformEdited(false);
+    }
+    const bool using_ = ImGuizmo::IsUsing();
+    if (gizmoWasUsing_ && !using_)
+        bodyTransformEdited(true); // drag finished: refresh the flow preview
+    gizmoWasUsing_ = using_;
 }
 
 void App::drawToolbar()
@@ -332,7 +391,7 @@ void App::drawLeftPanel()
     const ImGuiIO& io = ImGui::GetIO();
     ImGui::SetNextWindowPos(ImVec2(0, ui::kToolbarHeight));
     ImGui::SetNextWindowSize(ImVec2(ui::kLeftPanelWidth, io.DisplaySize.y - ui::kToolbarHeight - ui::kStatusHeight));
-    ImGui::Begin("##left", nullptr, kPanelFlags);
+    ImGui::Begin("##left", nullptr, kSidePanelFlags);
     const float fullW = ImGui::GetContentRegionAvail().x;
 
     // ---- Model ----------------------------------------------------------
@@ -352,25 +411,93 @@ void App::drawLeftPanel()
     const char* unitLabels[] = {kUnits[0].name, kUnits[1].name, kUnits[2].name, kUnits[3].name};
     if (ui::segmented("units", &unitsPreset_, unitLabels, 4, fullW) && !bodyPath_.empty()) {
         bodyScale_ = kUnits[unitsPreset_].toMetres;
-        applyBodyTransform();
-        previewSyntheticField();
+        bodyTransformEdited(true);
         frameCamera();
-        setPlaying(false);
     }
 
     ImGui::Dummy(ImVec2(0, 2));
     ImGui::TextUnformatted("Up axis in file");
     const char* upLabels[] = {"+Z", "+Y", "+X"};
     bool reorient = ui::segmented("up", &upAxis_, upLabels, 3, fullW);
-    ImGui::Dummy(ImVec2(0, 2));
-    ImGui::TextUnformatted("Rotate about up");
-    const char* yawLabels[] = {"0", "90", "180", "270"};
-    reorient |= ui::segmented("yaw", &yawSteps_, yawLabels, 4, fullW);
-    if (reorient) {
-        applyBodyTransform();
-        previewSyntheticField();
-        frameCamera();
-        setPlaying(false);
+    if (reorient)
+        bodyTransformEdited(true);
+    ImGui::EndDisabled();
+
+    // ---- Position --------------------------------------------------------
+    ImGui::Dummy(ImVec2(0, 6));
+    ui::sectionHeader("POSITION");
+    ImGui::BeginDisabled(cfdRunning());
+    {
+        const char* toolLabels[] = {"Select (Q)", "Move (W)", "Rotate (E)"};
+        int tool = static_cast<int>(gizmo_);
+        if (ui::segmented("tool", &tool, toolLabels, 3, fullW))
+            gizmo_ = static_cast<Gizmo>(tool);
+
+        if (ImGui::Checkbox("Rests on the floor", &params_.groundPlane)) {
+            if (!params_.groundPlane && bodyHeight_ <= 0.0f)
+                bodyHeight_ = 0.25f * std::max(body_.bounds().size().z, 1e-3f);
+            bodyTransformEdited(true);
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Cars: on (height is set automatically). Aircraft or raised objects: off.");
+
+        const float labelW = 64.0f;
+        auto row = [&](const char* label) {
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(label);
+            ImGui::SameLine(labelW);
+        };
+        const float step = std::max(body_.bounds().radius(), 1e-3f) * 0.01f;
+
+        row("X, Y (m)");
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::DragFloat2("##pos", &bodyPosition_.x, step, 0.0f, 0.0f, "%.3f"))
+            bodyTransformEdited(false);
+        if (ImGui::IsItemDeactivatedAfterEdit())
+            bodyTransformEdited(true);
+
+        row("Height");
+        ImGui::BeginDisabled(params_.groundPlane);
+        ImGui::SetNextItemWidth(-1);
+        float shownHeight = params_.groundPlane ? 0.0f : bodyHeight_;
+        if (ImGui::DragFloat("##height", &shownHeight, step, 0.0f, 1e4f, "%.3f m above floor")) {
+            bodyHeight_ = std::max(shownHeight, 0.0f);
+            bodyTransformEdited(false);
+        }
+        if (ImGui::IsItemDeactivatedAfterEdit())
+            bodyTransformEdited(true);
+        ImGui::EndDisabled();
+
+        const char* axisNames[] = {"Roll X", "Pitch Y", "Yaw Z"};
+        for (int a = 0; a < 3; ++a) {
+            ImGui::PushID(a);
+            row(axisNames[a]);
+            const float btnW = 38.0f;
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 2.0f * (btnW + ImGui::GetStyle().ItemSpacing.x));
+            if (ImGui::DragFloat("##rot", &bodyRotation_[a], 0.5f, -360.0f, 360.0f, "%.1f deg"))
+                bodyTransformEdited(false);
+            if (ImGui::IsItemDeactivatedAfterEdit())
+                bodyTransformEdited(true);
+            ImGui::SameLine();
+            if (ImGui::Button("-90", ImVec2(btnW, 0))) {
+                bodyRotation_[a] = std::remainder(bodyRotation_[a] - 90.0f, 360.0f);
+                bodyTransformEdited(true);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("+90", ImVec2(btnW, 0))) {
+                bodyRotation_[a] = std::remainder(bodyRotation_[a] + 90.0f, 360.0f);
+                bodyTransformEdited(true);
+            }
+            ImGui::PopID();
+        }
+        if (ImGui::Button("Reset position", ImVec2(-1, 0))) {
+            bodyRotation_ = glm::vec3(0.0f);
+            bodyPosition_ = glm::vec2(0.0f);
+            bodyHeight_ = 0.0f;
+            params_.groundPlane = true;
+            bodyTransformEdited(true);
+            frameCamera();
+        }
     }
     ui::hint("Wind blows along +X. Point the nose into the wind (towards -X).");
     ImGui::EndDisabled();
@@ -395,9 +522,6 @@ void App::drawLeftPanel()
         ui::hint("Instant preview uses idealised potential flow: no wake, no vortices. "
                  "Choose OpenFOAM CFD in the toolbar for a real simulation.");
     }
-    ImGui::Checkbox("Model sits on the floor", &params_.groundPlane);
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Cars: on. Aircraft or free-flying objects: off.");
 
     if (ImGui::TreeNode("Advanced")) {
         bool custom = false;
@@ -457,7 +581,7 @@ void App::drawRightPanel()
     const ImGuiIO& io = ImGui::GetIO();
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - ui::kRightPanelWidth, ui::kToolbarHeight));
     ImGui::SetNextWindowSize(ImVec2(ui::kRightPanelWidth, io.DisplaySize.y - ui::kToolbarHeight - ui::kStatusHeight));
-    ImGui::Begin("##right", nullptr, kPanelFlags);
+    ImGui::Begin("##right", nullptr, kSidePanelFlags);
 
     ui::sectionHeader("VIEW");
     // Layers in a fixed, meaningful order; unknown passes are appended.

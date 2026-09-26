@@ -15,7 +15,7 @@ struct SimulationParams {
     float upstream = 1.5f;   // inlet distance ahead of the body
     float downstream = 4.0f; // outlet distance behind the body
     float side = 1.5f;       // clearance on +-y and above the body
-    bool groundPlane = true; // body sits on the tunnel floor (z = body min z) if true
+    bool groundPlane = true; // body rests on the tunnel floor (z = 0); otherwise it is raised above it
 
     int gridCellsX = 128;    // resolution of the output FlowField along x (y, z derived to keep cells cubic)
     int iterations = 400;    // steady solver iterations

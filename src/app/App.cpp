@@ -14,10 +14,13 @@
 #include "solvers/synthetic/SyntheticSolver.h"
 
 #include <glad/glad.h>
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/euler_angles.hpp>
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
+#include <ImGuizmo.h>
 #include <stb_image_write.h>
 
 #include <algorithm>
@@ -77,7 +80,9 @@ App::App(Options options) : options_(std::move(options))
     createPasses();
 
     upAxis_ = options_.upAxis;
-    yawSteps_ = options_.yawSteps;
+    bodyRotation_.z = options_.yawDeg;
+    bodyRotation_.y = options_.pitchDeg;
+    gizmo_ = static_cast<Gizmo>(options_.tool);
     if (!loadBody(options_.stlPath.value_or(""), options_.stlScale))
         throw std::runtime_error(status_);
 
@@ -94,10 +99,10 @@ App::App(Options options) : options_(std::move(options))
     }
 
     frameCamera();
-    if (options_.yawDeg)
-        camera_.yaw = glm::radians(*options_.yawDeg);
-    if (options_.pitchDeg)
-        camera_.pitch = glm::radians(*options_.pitchDeg);
+    if (options_.camYawDeg)
+        camera_.yaw = glm::radians(*options_.camYawDeg);
+    if (options_.camPitchDeg)
+        camera_.pitch = glm::radians(*options_.camPitchDeg);
     camera_.zoom(1.0f / std::max(options_.zoom, 1e-3f));
 
     solverKind_ = solvers::OpenFoamSolver::available() ? SolverKind::OpenFoam : SolverKind::Synthetic;
@@ -169,6 +174,10 @@ void App::initWindow()
             app->frameCamera();
         if (key == GLFW_KEY_SPACE && action == GLFW_PRESS)
             app->onPlayPressed();
+        if (action == GLFW_PRESS && (key == GLFW_KEY_W || key == GLFW_KEY_E || key == GLFW_KEY_Q)) {
+            const Gizmo g = key == GLFW_KEY_W ? Gizmo::Move : key == GLFW_KEY_E ? Gizmo::Rotate : Gizmo::None;
+            app->gizmo_ = app->gizmo_ == g ? Gizmo::None : g;
+        }
     });
 }
 
@@ -221,6 +230,8 @@ bool App::loadBody(const std::string& path, float scale)
 
 void App::applyBodyTransform()
 {
+    const glm::mat4 R = glm::eulerAngleZYX(glm::radians(bodyRotation_.z), glm::radians(bodyRotation_.y),
+                                           glm::radians(bodyRotation_.x));
     core::SurfaceMesh mesh = rawBody_;
     for (auto& p : mesh.positions) {
         glm::vec3 q = p * bodyScale_;
@@ -228,13 +239,13 @@ void App::applyBodyTransform()
             q = {q.x, -q.z, q.y};
         else if (upAxis_ == 2) // +x up -> +z up
             q = {-q.z, q.y, q.x};
-        for (int i = 0; i < yawSteps_; ++i) // quarter turns about +z
-            q = {-q.y, q.x, q.z};
-        p = q;
+        p = glm::vec3(R * glm::vec4(q, 1.0f));
     }
-    // Centre in x/y and stand the body on the tunnel floor (z = 0).
+    // Place the centre at bodyPosition_ and the lowest point on the floor (or
+    // at the chosen ground clearance).
     const core::Bounds b = mesh.bounds();
-    mesh.transform(1.0f, glm::vec3(-b.centre().x, -b.centre().y, -b.min.z));
+    const float lift = params_.groundPlane ? 0.0f : std::max(bodyHeight_, 0.0f);
+    mesh.transform(1.0f, glm::vec3(bodyPosition_.x - b.centre().x, bodyPosition_.y - b.centre().y, lift - b.min.z));
     mesh.computeFaceNormals();
 
     body_ = std::move(mesh);
@@ -242,6 +253,14 @@ void App::applyBodyTransform()
     flowTextures_.clear();
     notifyBody();
     notifyField();
+}
+
+void App::bodyTransformEdited(bool finished)
+{
+    applyBodyTransform();
+    setPlaying(false);
+    if (finished)
+        previewSyntheticField();
 }
 
 void App::previewSyntheticField()
@@ -466,7 +485,7 @@ void App::handleCameraInput()
     }
     // Only start a drag outside the UI; keep it once started.
     if (!dragging_) {
-        if (ImGui::GetIO().WantCaptureMouse || viewCube_.wantsMouse())
+        if (ImGui::GetIO().WantCaptureMouse || viewCube_.wantsMouse() || ImGuizmo::IsOver() || ImGuizmo::IsUsing())
             return;
         int fbw = 0, fbh = 0, ww = 0, wh = 0;
         glfwGetFramebufferSize(window_, &fbw, &fbh);

@@ -42,7 +42,9 @@ private:
 
     // Scene changes (main thread only).
     bool loadBody(const std::string& path, float scale); // empty path = test sphere
-    void applyBodyTransform(); // rawBody_ -> body_ (scale, orientation, placed on the floor)
+    void applyBodyTransform(); // rawBody_ -> body_ (scale, up preset, rotation, position)
+    void bodyTransformEdited(bool finished); // live update while editing, preview when finished
+    void drawGizmo();
     void previewSyntheticField(); // async in window mode, synchronous for screenshots
     void rescaleField(float newSpeed); // potential flow scales exactly with U
     void setField(core::FlowField field);
@@ -92,8 +94,13 @@ private:
     float bodyScale_ = 1.0f;
     core::SurfaceMesh rawBody_; // as loaded from the STL
     core::SurfaceMesh body_;    // metres, oriented (+x flow, +z up), centred in y, on z = 0
-    int upAxis_ = 0;            // see Options::upAxis
-    int yawSteps_ = 0;          // quarter turns about +z
+    int upAxis_ = 0;                    // see Options::upAxis
+    glm::vec3 bodyRotation_{0.0f};      // degrees about world X, Y, Z (applied X, then Y, then Z)
+    glm::vec2 bodyPosition_{0.0f};      // body centre in the floor plane (m)
+    float bodyHeight_ = 0.0f;           // lowest point above the floor when not resting on it (m)
+    enum class Gizmo { None = 0, Move = 1, Rotate = 2 };
+    Gizmo gizmo_ = Gizmo::None;
+    bool gizmoWasUsing_ = false;
     core::FlowField field_;
     render::FlowTextures flowTextures_;
     core::SimulationParams params_;

@@ -48,8 +48,13 @@ Options parseOptions(int argc, char** argv)
             else
                 throw std::runtime_error("--up expects z, y or x");
         } else if (a == "--yaw")
-            o.yawSteps = ((static_cast<int>(std::lround(std::stof(need(i)) / 90.0f)) % 4) + 4) % 4;
-        else if (a == "--field")
+            o.yawDeg = std::stof(need(i));
+        else if (a == "--pitch")
+            o.pitchDeg = std::stof(need(i));
+        else if (a == "--tool") {
+            const std::string v = need(i);
+            o.tool = v == "move" ? 1 : v == "rotate" ? 2 : 0;
+        } else if (a == "--field")
             o.field = need(i);
         else if (a == "--solve")
             o.solve = need(i);
@@ -71,11 +76,11 @@ Options parseOptions(int argc, char** argv)
             const auto parts = split(need(i), ',');
             if (parts.size() != 3)
                 throw std::runtime_error("--camera expects yaw,pitch,zoom");
-            o.yawDeg = std::stof(parts[0]);
-            o.pitchDeg = std::stof(parts[1]);
+            o.camYawDeg = std::stof(parts[0]);
+            o.camPitchDeg = std::stof(parts[1]);
             o.zoom = std::stof(parts[2]);
         } else if (a == "--help" || a == "-h") {
-            throw std::runtime_error("usage: windtunnel [--stl file] [--scale s] [--up z|y|x] [--yaw deg] [--field synthetic|none|openfoam:<dir>]\n"
+            throw std::runtime_error("usage: windtunnel [--stl file] [--scale s] [--up z|y|x] [--yaw deg] [--pitch deg] [--tool move|rotate] [--field synthetic|none|openfoam:<dir>]\n"
                                      "  [--solve openfoam] [--passes a,b] [--screenshot out.png] [--frames n] [--ui] [--play]\n"
                                      "  [--size WxH] [--camera yaw,pitch,zoom]");
         } else {

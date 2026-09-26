@@ -12,7 +12,9 @@ namespace app {
 //   --stl <file>            body to load (default: built-in sphere)
 //   --scale <s>             STL units -> metres (e.g. 0.001 for mm), default 1
 //   --up <z|y|x>            which STL axis points up (default z)
-//   --yaw <deg>             rotate the body about the up axis (multiples of 90)
+//   --yaw <deg>             rotate the body about the vertical axis
+//   --pitch <deg>           rotate the body about the Y axis (e.g. 90 to lay a tall model down)
+//   --tool <move|rotate>    start with the move or rotate gizmo active
 //   --field <spec>          synthetic | none | openfoam:<workDir>   (default synthetic)
 //   --solve openfoam        run the OpenFOAM solver on startup (window mode)
 //   --passes <a,b,...>      enabled passes by name (case-insensitive), e.g. model,slice
@@ -26,7 +28,9 @@ struct Options {
     std::optional<std::string> stlPath;
     float stlScale = 1.0f;
     int upAxis = 0;   // 0 = +z, 1 = +y, 2 = +x is up in the STL
-    int yawSteps = 0; // quarter turns about the up axis
+    float yawDeg = 0.0f;   // rotation about the vertical axis
+    float pitchDeg = 0.0f; // rotation about Y
+    int tool = 0;          // 0 none, 1 move, 2 rotate
     std::string field = "synthetic";
     std::optional<std::string> solve;
     std::optional<std::vector<std::string>> passes;
@@ -35,7 +39,7 @@ struct Options {
     bool showUi = false;
     bool play = false;
     int width = 1600, height = 900;
-    std::optional<float> yawDeg, pitchDeg;
+    std::optional<float> camYawDeg, camPitchDeg;
     float zoom = 1.0f;
 };
 
