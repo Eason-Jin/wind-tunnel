@@ -12,6 +12,8 @@
 #include "render/RenderPass.h"
 
 #include <atomic>
+#include <cstdint>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -119,6 +121,28 @@ private:
     float solveSpeed_ = 0.0f;    // inlet speed of the run in flight
     core::SimulationParams fieldParams_; // settings the current field was computed with
     core::SimulationParams solveParams_; // settings of the run in flight
+
+    // In-memory cache of computed fields (previews and CFD results), so going
+    // back to settings that were already solved is instant. Keyed by the body
+    // placement (bodyVersion_) and the settings that change the result.
+    struct CachedField {
+        SolverKind kind;
+        std::uint64_t bodyVersion;
+        core::SimulationParams params;
+        core::FlowField field;
+    };
+    static constexpr std::size_t kFieldCacheSize = 8;
+    std::deque<CachedField> fieldCache_;
+    std::uint64_t bodyVersion_ = 0;      // bumped whenever the body geometry/placement changes
+    std::uint64_t solveBodyVersion_ = 0; // body version of the run in flight
+    bool restoreFromCache(SolverKind kind);
+    void storeInCache(SolverKind kind, std::uint64_t bodyVersion, const core::SimulationParams& params,
+                      const core::FlowField& field);
+
+    // Fullscreen toggle (F11): windowed placement to restore.
+    bool fullscreen_ = false;
+    int windowedX_ = 0, windowedY_ = 0, windowedW_ = 1600, windowedH_ = 900;
+    void toggleFullscreen();
     SolverKind runningKind_ = SolverKind::Synthetic;
     bool layersShownOnPlay_ = false;
     int quality_ = 1;            // 0 draft, 1 normal, 2 fine, 3 custom

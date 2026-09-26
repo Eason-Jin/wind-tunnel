@@ -145,6 +145,8 @@ void App::initWindow()
     glfwWindowHint(GLFW_SAMPLES, 4);
     if (options_.screenshot)
         glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+    else
+        glfwWindowHint(GLFW_MAXIMIZED, GLFW_TRUE); // open filling the screen (F11: true fullscreen)
 
     window_ = glfwCreateWindow(options_.width, options_.height, "Wind Tunnel", nullptr, nullptr);
     if (!window_)
@@ -176,6 +178,8 @@ void App::initWindow()
             app->frameCamera();
         if (key == GLFW_KEY_SPACE && action == GLFW_PRESS)
             app->onPlayPressed();
+        if (key == GLFW_KEY_F11 && action == GLFW_PRESS)
+            app->toggleFullscreen();
         if (action == GLFW_PRESS && (key == GLFW_KEY_W || key == GLFW_KEY_E || key == GLFW_KEY_Q)) {
             const Gizmo g = key == GLFW_KEY_W ? Gizmo::Move : key == GLFW_KEY_E ? Gizmo::Rotate : Gizmo::None;
             app->gizmo_ = app->gizmo_ == g ? Gizmo::None : g;
@@ -217,6 +221,7 @@ bool App::loadBody(const std::string& path, float scale)
         if (mesh.empty())
             throw std::runtime_error("mesh has no triangles");
         rawBody_ = std::move(mesh);
+        fieldCache_.clear(); // results for the previous model are no longer useful
         bodyPath_ = path;
         bodyScale_ = path.empty() ? 1.0f : scale;
         applyBodyTransform();
@@ -251,6 +256,7 @@ void App::applyBodyTransform()
     mesh.computeFaceNormals();
 
     body_ = std::move(mesh);
+    ++bodyVersion_;
     field_ = core::FlowField{};
     flowTextures_.clear();
     notifyBody();
@@ -267,11 +273,18 @@ void App::bodyTransformEdited(bool finished)
 
 void App::previewSyntheticField()
 {
+    if (running_ && runningKind_ == SolverKind::Synthetic) {
+        cancelSolver(); // superseded: another preview is wanted now
+        pollSolver();
+    }
+    if (restoreFromCache(SolverKind::Synthetic))
+        return;
     if (options_.screenshot) {
         setField(solvers::makeSyntheticField(body_, params_));
         fieldIsPreview_ = true;
         fieldSpeed_ = params_.inletSpeed;
         fieldParams_ = params_;
+        storeInCache(SolverKind::Synthetic, bodyVersion_, params_, field_);
         return;
     }
     if (running_) {
@@ -350,6 +363,7 @@ void App::startSolver(SolverKind kind)
     running_ = true;
     solveSpeed_ = params_.inletSpeed;
     solveParams_ = params_;
+    solveBodyVersion_ = bodyVersion_;
     status_ = "Running " + solver_->name();
 
     worker_ = std::thread([this, body = body_, params = params_]() {
@@ -412,6 +426,14 @@ void App::pollSolver()
         status_ = "Solver returned an empty field";
         return;
     }
+    storeInCache(runningKind_, solveBodyVersion_, solveParams_, result);
+    const core::SimulationParams& a = solveParams_;
+    const core::SimulationParams& b = params_;
+    const bool stillWanted = solveBodyVersion_ == bodyVersion_ && a.gridCellsX == b.gridCellsX &&
+                             a.upstream == b.upstream && a.downstream == b.downstream && a.side == b.side &&
+                             a.groundPlane == b.groundPlane;
+    if (!stillWanted)
+        return; // body or settings changed while solving: keep the result cached, don't show it
     setField(std::move(result));
     fieldIsPreview_ = runningKind_ == SolverKind::Synthetic;
     fieldSpeed_ = solveSpeed_;
@@ -419,6 +441,63 @@ void App::pollSolver()
     status_ = fieldIsPreview_ ? "Instant preview ready (potential flow: no wake or vortices)" : "Simulation finished";
     if (play)
         setPlaying(true);
+}
+
+void App::storeInCache(SolverKind kind, std::uint64_t bodyVersion, const core::SimulationParams& params,
+                       const core::FlowField& field)
+{
+    if (field.empty())
+        return;
+    fieldCache_.push_front({kind, bodyVersion, params, field});
+    while (fieldCache_.size() > kFieldCacheSize)
+        fieldCache_.pop_back();
+}
+
+bool App::restoreFromCache(SolverKind kind)
+{
+    const core::SimulationParams& want = params_;
+    auto matches = [&](const CachedField& e) {
+        const core::SimulationParams& p = e.params;
+        if (e.kind != kind || e.bodyVersion != bodyVersion_ || p.gridCellsX != want.gridCellsX ||
+            p.upstream != want.upstream || p.downstream != want.downstream || p.side != want.side ||
+            p.groundPlane != want.groundPlane)
+            return false;
+        if (kind == SolverKind::Synthetic)
+            return true; // potential flow scales exactly with speed
+        return p.refinementLevel == want.refinementLevel && p.iterations == want.iterations &&
+               std::abs(p.inletSpeed - want.inletSpeed) < 1e-4f && p.kinematicViscosity == want.kinematicViscosity;
+    };
+    const auto it = std::find_if(fieldCache_.begin(), fieldCache_.end(), matches);
+    if (it == fieldCache_.end())
+        return false;
+    CachedField entry = std::move(*it);
+    fieldCache_.erase(it);
+    fieldCache_.push_front(entry); // most recently used first
+    setField(entry.field);
+    fieldIsPreview_ = kind == SolverKind::Synthetic;
+    fieldSpeed_ = entry.params.inletSpeed;
+    fieldParams_ = entry.params;
+    if (fieldIsPreview_ && std::abs(fieldSpeed_ - params_.inletSpeed) > 1e-4f)
+        rescaleField(params_.inletSpeed);
+    status_ = fieldIsPreview_ ? "Instant preview (from cache)" : "Simulation result (from cache)";
+    return true;
+}
+
+void App::toggleFullscreen()
+{
+    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+    if (!monitor)
+        return;
+    if (!fullscreen_) {
+        glfwGetWindowPos(window_, &windowedX_, &windowedY_);
+        glfwGetWindowSize(window_, &windowedW_, &windowedH_);
+        const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+        glfwSetWindowMonitor(window_, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
+    } else {
+        glfwSetWindowMonitor(window_, nullptr, windowedX_, windowedY_, windowedW_, windowedH_, 0);
+    }
+    fullscreen_ = !fullscreen_;
+    glfwSwapInterval(1);
 }
 
 void App::renderScene(int x, int y, int width, int height, float time, float dt)

@@ -153,9 +153,11 @@ bool App::needsSolve() const
 void App::simulationSettingsChanged()
 {
     if (field_.empty() || fieldIsPreview_) {
-        previewSyntheticField(); // cheap: follow the new settings immediately
+        previewSyntheticField(); // cheap (or cached): follow the new settings immediately
         return;
     }
+    if (needsSolve() && restoreFromCache(SolverKind::OpenFoam))
+        return; // these settings were already simulated
     if (needsSolve())
         status_ = "Settings changed - press Simulate to update the result (showing the previous solution)";
 }
@@ -194,6 +196,10 @@ void App::onPlayPressed()
         }
         playAfterSolve_ = true;
         previewSyntheticField();
+        return;
+    }
+    if (restoreFromCache(SolverKind::OpenFoam)) {
+        setPlaying(true);
         return;
     }
     playAfterSolve_ = true;
@@ -656,7 +662,7 @@ void App::drawRightPanel()
     if (ImGui::Button("Reset view (F)", ImVec2(-1, 0)))
         frameCamera();
     ImGui::ColorEdit3("Background", &background_.x, ImGuiColorEditFlags_NoInputs);
-    ui::hint("Left drag: orbit   Right drag: pan   Wheel: zoom   Space: play/pause");
+    ui::hint("Left drag: orbit   Right drag: pan   Wheel: zoom   Space: play/pause   F11: fullscreen");
 
     ImGui::End();
 }
