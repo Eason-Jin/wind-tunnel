@@ -180,8 +180,18 @@ void App::updateSceneRect(float displayW, float displayH, float fbScale)
     sceneRect_.h = static_cast<int>(h * fbScale);
 }
 
+void App::openPickedFile(const std::string& path)
+{
+    if (loadBody(path, kUnits[unitsPreset_].toMetres)) {
+        previewSyntheticField();
+        frameCamera();
+        setPlaying(false);
+    }
+}
+
 void App::drawUi()
 {
+    filePicker_.drawPopups();
     const ImGuiIO& io = ImGui::GetIO();
     updateSceneRect(io.DisplaySize.x, io.DisplaySize.y, io.DisplayFramebufferScale.x);
     drawToolbar();
@@ -215,41 +225,25 @@ void App::drawToolbar()
     // File actions.
     ImGui::SameLine(0, 28);
     centreInBar(H, frameH);
-    ImGui::BeginDisabled(running_);
+    ImGui::BeginDisabled(running_ || filePicker_.busy());
     if (ImGui::Button("  Open STL...  "))
-        ImGui::OpenPopup("##open");
+        filePicker_.openDialog();
     ImGui::SameLine();
     centreInBar(H, frameH);
     if (ImGui::Button("  Samples  "))
         ImGui::OpenPopup("##samples");
     ImGui::EndDisabled();
-
-    // Temporary open popup: a path box (replaced by the native file dialog).
-    if (ImGui::BeginPopup("##open")) {
-        static char path[1024] = "";
-        ImGui::SetNextItemWidth(420);
-        ImGui::InputTextWithHint("##path", "/path/to/model.stl", path, sizeof path);
-        ImGui::SameLine();
-        if (ImGui::Button("Open")) {
-            if (loadBody(path, bodyScale_)) {
-                previewSyntheticField();
-                frameCamera();
-                setPlaying(false);
-            }
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
-    }
     if (ImGui::BeginPopup("##samples")) {
-        if (ImGui::Selectable("Test sphere")) {
-            if (loadBody("", 1.0f)) {
-                previewSyntheticField();
-                frameCamera();
-                setPlaying(false);
-            }
-        }
+        filePicker_.drawSamplesMenu();
         ImGui::EndPopup();
     }
+    if (filePicker_.busy()) {
+        ImGui::SameLine();
+        centreInBar(H, ImGui::GetTextLineHeight());
+        ImGui::TextDisabled("Opening...");
+    }
+    if (auto picked = filePicker_.takeResult())
+        openPickedFile(*picked);
 
     // Centre group: speed + play.
     const float speedW = 110.0f, unitW = 80.0f, playW = 150.0f, playH = 40.0f;

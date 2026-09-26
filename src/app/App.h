@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app/Options.h"
+#include "app/ui/FilePicker.h"
 #include "core/FlowField.h"
 #include "core/ISolver.h"
 #include "core/SimulationParams.h"
@@ -70,6 +71,7 @@ private:
     void setPlaying(bool playing);
     void applyQualityPreset();
     render::RenderPass* findPass(const char* name) const;
+    void openPickedFile(const std::string& path);
 
     int runWindow();
     int runScreenshot();
@@ -79,6 +81,7 @@ private:
     bool imguiReady_ = false;
 
     render::OrbitCamera camera_;
+    ui::FilePicker filePicker_;
     std::vector<std::unique_ptr<render::RenderPass>> passes_;
 
     std::string bodyPath_;
