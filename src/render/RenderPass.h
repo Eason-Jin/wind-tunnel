@@ -49,6 +49,10 @@ public:
     virtual void draw(const FrameContext&) = 0;
     virtual void drawUi() {}
 
+    // The toolbar's Play button: passes that can animate the flow (moving
+    // particles, marching streamline dashes) start/stop doing so.
+    virtual void setPlaying(bool) {}
+
     bool enabled = true;
 };
 

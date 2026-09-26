@@ -55,6 +55,8 @@ Options parseOptions(int argc, char** argv)
             o.solve = need(i);
         else if (a == "--passes")
             o.passes = split(need(i), ',');
+        else if (a == "--ui")
+            o.showUi = true;
         else if (a == "--screenshot")
             o.screenshot = need(i);
         else if (a == "--frames")
@@ -72,7 +74,7 @@ Options parseOptions(int argc, char** argv)
             o.zoom = std::stof(parts[2]);
         } else if (a == "--help" || a == "-h") {
             throw std::runtime_error("usage: windtunnel [--stl file] [--scale s] [--up z|y|x] [--yaw deg] [--field synthetic|none|openfoam:<dir>]\n"
-                                     "  [--solve openfoam] [--passes a,b] [--screenshot out.png] [--frames n]\n"
+                                     "  [--solve openfoam] [--passes a,b] [--screenshot out.png] [--frames n] [--ui]\n"
                                      "  [--size WxH] [--camera yaw,pitch,zoom]");
         } else {
             throw std::runtime_error("Unknown option: " + a + " (try --help)");

@@ -65,7 +65,7 @@ App::App(Options options) : options_(std::move(options))
     // OpenFOAM scales with physical cores; hardware_concurrency counts SMT threads.
     params_.processors = static_cast<int>(std::clamp(std::thread::hardware_concurrency() / 2u, 1u, 8u));
     initWindow();
-    if (!options_.screenshot)
+    if (!options_.screenshot || options_.showUi)
         initImGui();
     createPasses();
 
@@ -610,8 +610,23 @@ int App::runScreenshot()
 
     glBindFramebuffer(GL_FRAMEBUFFER, fbo[0]);
     const float dt = 1.0f / 60.0f;
-    for (int i = 0; i < options_.frames; ++i)
-        renderScene(w, h, static_cast<float>(i) * dt, dt);
+    for (int i = 0; i < options_.frames; ++i) {
+        const float t = static_cast<float>(i) * dt;
+        if (!options_.showUi) {
+            renderScene(w, h, t, dt);
+            continue;
+        }
+        // Drive ImGui exactly like the window loop so the panels are laid out.
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::GetIO().DisplaySize = ImVec2(static_cast<float>(w), static_cast<float>(h));
+        ImGui::GetIO().DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
+        ImGui::NewFrame();
+        drawUi();
+        ImGui::Render();
+        renderScene(w, h, t, dt);
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    }
     glBlitNamedFramebuffer(fbo[0], fbo[1], 0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
 
     std::vector<unsigned char> pixels(static_cast<std::size_t>(w) * h * 4);
