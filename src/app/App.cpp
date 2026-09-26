@@ -62,6 +62,8 @@ App* fromWindow(GLFWwindow* w) { return static_cast<App*>(glfwGetWindowUserPoint
 App::App(Options options) : options_(std::move(options))
 {
     params_.workDir = std::filesystem::path(WT_PROJECT_DIR) / "cases" / "run";
+    // OpenFOAM scales with physical cores; hardware_concurrency counts SMT threads.
+    params_.processors = static_cast<int>(std::clamp(std::thread::hardware_concurrency() / 2u, 1u, 8u));
     initWindow();
     if (!options_.screenshot)
         initImGui();
@@ -177,9 +179,11 @@ void App::createPasses()
     passes_.push_back(std::make_unique<render::SlicePass>());
     passes_.push_back(std::make_unique<render::StreamlinePass>());
     passes_.push_back(std::make_unique<render::ParticlePass>());
-    if (options_.passes)
-        for (auto& p : passes_)
-            p->enabled = passSelected(*options_.passes, p->name());
+    // Default view: body + streamlines. Slice and particles are one click away
+    // in the Display panel; all at once is too cluttered to read.
+    const std::vector<std::string> defaults = {"tunnel", "model", "streamline"};
+    for (auto& p : passes_)
+        p->enabled = passSelected(options_.passes.value_or(defaults), p->name());
 }
 
 bool App::loadBody(const std::string& path, float scale)
