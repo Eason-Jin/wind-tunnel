@@ -91,3 +91,8 @@ add_executable(windtunnel ${WT_APP_SRC})
 target_link_libraries(windtunnel PRIVATE wt_core wt_io wt_solvers wt_render glad glfw imgui stb)
 target_compile_definitions(windtunnel PRIVATE WT_PROJECT_DIR="${CMAKE_SOURCE_DIR}")
 target_compile_options(windtunnel PRIVATE ${WT_WARNINGS})
+
+# --- Tools -------------------------------------------------------------------
+add_executable(wt_prep tools/wt_prep.cpp)
+target_link_libraries(wt_prep PRIVATE wt_core wt_io)
+target_compile_options(wt_prep PRIVATE ${WT_WARNINGS})

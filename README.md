@@ -43,6 +43,20 @@ Mouse controls: left-drag to orbit, right-drag to pan, the wheel to zoom, and `F
 
 `--screenshot out.png [--frames N] [--camera yaw,pitch,zoom] [--passes model,slice,...] [--ui] [--play]` renders offscreen and exits. Run `--help` for all options.
 
+## Game models (BeamNG) and other non-watertight meshes
+
+Game meshes are loose, open panels. Convert them to one closed hull first:
+
+```bash
+python3 tools/beamng_to_stl.py MOD.zip --list                         # vehicles and configurations
+python3 tools/beamng_to_stl.py MOD.zip --config facelift_gxl -o raw.stl
+./build/wt_prep raw.stl car.stl                                       # shrink-wrap: seal gaps, drop interior
+./build/windtunnel --stl car.stl
+```
+
+- `beamng_to_stl.py` resolves the chosen configuration's parts, adds tyres at the hubs and rotates the car so the nose faces the wind (needs `numpy`).
+- `wt_prep` works on any STL: `--voxel` sets the detail (default 1.2 cm), and `--close` sets the widest gap it seals.
+
 ## Layout
 
 | Module | Role |

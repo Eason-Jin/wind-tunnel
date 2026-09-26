@@ -15,4 +15,7 @@ core::SurfaceMesh loadStl(const std::filesystem::path& path);
 // Throws std::runtime_error if the file cannot be written.
 void writeStl(const core::SurfaceMesh& mesh, const std::filesystem::path& path, const std::string& solidName = "body");
 
+// Write a mesh as binary STL (compact: 50 bytes per triangle).
+void writeStlBinary(const core::SurfaceMesh& mesh, const std::filesystem::path& path);
+
 } // namespace io
