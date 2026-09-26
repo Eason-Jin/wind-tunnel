@@ -346,10 +346,21 @@ void OpenFoamSolver::run(const core::ProgressFn& progress, const std::atomic<boo
         // --- Meshing --------------------------------------------------------
         runStep("Meshing", "blockMesh", "blockMesh", dir, 0.00f, 0.02f);
         runStep("Meshing", "surfaceFeatureExtract", "surfaceFeatureExtract", dir, 0.02f, 0.03f);
-        runStep("Meshing", "snappyHexMesh", "snappyHexMesh -overwrite", dir, 0.03f, 0.22f);
-        fs::copy(dir / "0.orig", dir / "0", fs::copy_options::recursive | fs::copy_options::overwrite_existing);
-        if (parallel)
-            runStep("Meshing", "decomposePar", "decomposePar -force", dir, 0.22f, 0.25f);
+        if (parallel) {
+            // Mesh in parallel (snappyHexMesh is otherwise the slowest serial
+            // step), then give every processor its initial fields; the
+            // boundary dictionaries include setConstraintTypes, so the
+            // processor patches are handled automatically.
+            runStep("Meshing", "decomposePar", "decomposePar -force", dir, 0.03f, 0.04f, "decomposePar.mesh");
+            runStep("Meshing", "snappyHexMesh", mpi + "snappyHexMesh -parallel -overwrite", dir, 0.04f, 0.24f);
+            for (const auto& entry : fs::directory_iterator(dir))
+                if (entry.is_directory() && entry.path().filename().string().rfind("processor", 0) == 0)
+                    fs::copy(dir / "0.orig", entry.path() / "0",
+                             fs::copy_options::recursive | fs::copy_options::overwrite_existing);
+        } else {
+            runStep("Meshing", "snappyHexMesh", "snappyHexMesh -overwrite", dir, 0.03f, 0.24f);
+            fs::copy(dir / "0.orig", dir / "0", fs::copy_options::recursive | fs::copy_options::overwrite_existing);
+        }
 
         // --- Solving --------------------------------------------------------
         runStep("Solving", "potentialFoam", parallel ? mpi + "potentialFoam -parallel -writephi" : "potentialFoam -writephi", dir, 0.25f, 0.27f);
@@ -376,8 +387,10 @@ void OpenFoamSolver::run(const core::ProgressFn& progress, const std::atomic<boo
             timings << buf;
             report("Solving", f1, monitor.summary());
         }
-        if (parallel)
-            runStep("Solving", "reconstructPar", "reconstructPar -latestTime", dir, 0.90f, 0.92f);
+        if (parallel) {
+            runStep("Solving", "reconstructParMesh", "reconstructParMesh -constant", dir, 0.90f, 0.91f);
+            runStep("Solving", "reconstructPar", "reconstructPar -latestTime", dir, 0.91f, 0.92f);
+        }
 
         const std::string latest = latestTimeDir(dir);
         if (latest.empty() || latest == "0")

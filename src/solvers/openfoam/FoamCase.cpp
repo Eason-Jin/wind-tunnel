@@ -60,14 +60,47 @@ constexpr const char* kFaceYMax = "(3 7 6 2)";
 constexpr const char* kFaceZMin = "(0 3 2 1)";
 constexpr const char* kFaceZMax = "(4 5 6 7)";
 
-std::string controlDict(const std::string& app, int endTime, int writeInterval)
+std::string controlDict(const std::string& app, int endTime, int writeInterval, const char* format = "ascii",
+                        const std::string& functions = "")
 {
     return "application     " + app +
            ";\nstartFrom       startTime;\nstartTime       0;\nstopAt          endTime;\nendTime         " +
            std::to_string(endTime) + ";\ndeltaT          1;\nwriteControl    timeStep;\nwriteInterval   " +
-           std::to_string(writeInterval) +
-           ";\npurgeWrite      0;\nwriteFormat     ascii;\nwritePrecision  7;\nwriteCompression off;\n"
-           "timeFormat      general;\ntimePrecision   6;\nrunTimeModifiable false;\n";
+           std::to_string(writeInterval) + ";\npurgeWrite      0;\nwriteFormat     " + format +
+           ";\nwritePrecision  7;\nwriteCompression off;\n"
+           "timeFormat      general;\ntimePrecision   6;\nrunTimeModifiable false;\n" + functions;
+}
+
+// Drag monitoring plus an automatic stop once the drag coefficient's running
+// average has settled (as in the simpleCar tutorial): a converged steady
+// result without spending the remaining iterations. Never stops before
+// `minIterations`, so an early plateau cannot end the run prematurely.
+std::string convergenceFunctions(const CaseSpec& s, int minIterations)
+{
+    const glm::dvec3 c = (glm::dvec3(s.body.min) + glm::dvec3(s.body.max)) * 0.5;
+    const glm::dvec3 size = glm::dvec3(s.body.max) - glm::dvec3(s.body.min);
+    const double lRef = std::max(size.x, 1e-6);
+    const double aRef = std::max(size.y * size.z, 1e-12); // frontal box area: only the scale of Cd depends on it
+    std::ostringstream f;
+    f << "\nfunctions\n{\n"
+      << "    forceCoeffs\n    {\n"
+      << "        type            forceCoeffs;\n        libs            (forces);\n"
+      << "        writeControl    timeStep;\n        writeInterval   1;\n        log             false;\n"
+      << "        patches         (\"body.*\");\n        p               p;\n        U               U;\n"
+      << "        rho             rhoInf;\n        rhoInf          1;\n"
+      << "        liftDir         (0 0 1);\n        dragDir         (1 0 0);\n        pitchAxis       (0 1 0);\n"
+      << "        CofR            (" << c.x << " " << c.y << " " << c.z << ");\n"
+      << "        magUInf         " << s.inletSpeed << ";\n        lRef            " << lRef
+      << ";\n        Aref            " << aRef << ";\n    }\n"
+      << "    converged\n    {\n"
+      << "        type            runTimeControl;\n        libs            (utilityFunctionObjects);\n"
+      << "        timeStart       " << minIterations << ";\n"
+      << "        conditions\n        {\n            drag\n            {\n"
+      << "                type            average;\n                functionObject  forceCoeffs;\n"
+      << "                fields          (Cd);\n                tolerance       1e-3;\n"
+      << "                window          50;\n                windowType      exact;\n"
+      << "            }\n        }\n        satisfiedAction end;\n    }\n}\n";
+    return f.str();
 }
 
 const char* kFvSchemes = R"FOAM(ddtSchemes
@@ -320,7 +353,11 @@ void writeMainCase(const fs::path& c, const CaseSpec& s)
 {
     const fs::path sys = c / "system", cst = c / "constant", zero = c / "0.orig";
 
-    writeFoamFile(sys / "controlDict", "dictionary", controlDict("simpleFoam", s.iterations, s.iterations));
+    // Binary I/O for the (large) CFD case; the small output grid case stays
+    // ASCII because our reader parses it.
+    writeFoamFile(sys / "controlDict", "dictionary",
+                  controlDict("simpleFoam", s.iterations, s.iterations, "binary",
+                              convergenceFunctions(s, std::min(s.iterations, std::max(100, s.iterations / 4)))));
     writeFoamFile(sys / "fvSchemes", "dictionary", kFvSchemes);
     writeFoamFile(sys / "fvSolution", "dictionary", kFvSolution);
     writeFoamFile(sys / "meshQualityDict", "dictionary", "#includeEtc \"caseDicts/meshQualityDict\"\n\nminFaceWeight 0.02;\n");
