@@ -63,7 +63,8 @@ constexpr LayerInfo kLayers[] = {
     {"Model", "Body surface", "Shaded model, coloured by surface pressure (Cp)"},
     {"Streamline", "Streamlines", "Paths of air released from a rake upstream"},
     {"Particle", "Smoke", "Animated tracer particles (press Play)"},
-    {"Vortices", "Vortex cores", "Swirling structures (Q-criterion)"},
+    {"Swirl", "Swirl lines", "Streamlines wound around the strongest vortices"},
+    {"Vortices", "Vortex surfaces", "Advanced: outline of swirling regions (Q-criterion isosurface)"},
     {"Slice", "Section plane", "Cut through the flow, with in-plane streamlines"},
     {"Tunnel", "Tunnel outline", "Test-section box, floor grid and flow arrow"},
 };

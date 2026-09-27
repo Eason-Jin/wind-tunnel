@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <thread>
 #include <vector>
@@ -15,8 +16,11 @@ namespace {
 
 // --- CPU tracing -------------------------------------------------------------
 
-std::vector<StreamlinePoint> traceOne(const core::FlowField& field, const glm::vec3& seed, float stepLen, int maxSteps)
+// `direction` -1 traces upstream (against the flow).
+std::vector<StreamlinePoint> traceOne(const core::FlowField& field, const glm::vec3& seed, float stepLen, int maxSteps,
+                                      float direction = 1.0f)
 {
+    const auto velocity = [&](const glm::vec3& at) { return direction * field.sampleVelocity(at); };
     std::vector<StreamlinePoint> pts;
     if (!field.contains(seed) || field.isSolid(seed))
         return pts;
@@ -24,7 +28,7 @@ std::vector<StreamlinePoint> traceOne(const core::FlowField& field, const glm::v
     const float minSpeed = 1e-3f * std::max(field.freestreamSpeed, 1e-6f);
 
     glm::vec3 p = seed;
-    glm::vec3 u = field.sampleVelocity(p);
+    glm::vec3 u = velocity(p);
     float speed = glm::length(u);
     pts.push_back({p, speed, 0.0f});
     if (speed < minSpeed)
@@ -38,9 +42,9 @@ std::vector<StreamlinePoint> traceOne(const core::FlowField& field, const glm::v
             break;
         const float dt = stepLen / s1; // fixed spatial step, normalised by local speed
 
-        const glm::vec3 k2 = field.sampleVelocity(p + 0.5f * dt * k1);
-        const glm::vec3 k3 = field.sampleVelocity(p + 0.5f * dt * k2);
-        const glm::vec3 k4 = field.sampleVelocity(p + dt * k3);
+        const glm::vec3 k2 = velocity(p + 0.5f * dt * k1);
+        const glm::vec3 k3 = velocity(p + 0.5f * dt * k2);
+        const glm::vec3 k4 = velocity(p + dt * k3);
         const glm::vec3 next = p + (dt / 6.0f) * (k1 + 2.0f * k2 + 2.0f * k3 + k4);
 
         if (!field.contains(next) || field.isSolid(next))
@@ -48,16 +52,36 @@ std::vector<StreamlinePoint> traceOne(const core::FlowField& field, const glm::v
 
         arc += glm::length(next - p);
         p = next;
-        u = field.sampleVelocity(p);
+        u = velocity(p);
         speed = glm::length(u);
         pts.push_back({p, speed, arc});
     }
     return pts;
 }
 
+// Upstream and downstream from the seed, joined into one line running with
+// the flow (arc length restarts at its upstream end).
+std::vector<StreamlinePoint> traceBothWays(const core::FlowField& field, const glm::vec3& seed, float stepLen, int maxSteps)
+{
+    std::vector<StreamlinePoint> back = traceOne(field, seed, stepLen, maxSteps, -1.0f);
+    const std::vector<StreamlinePoint> forward = traceOne(field, seed, stepLen, maxSteps);
+    if (back.empty())
+        return forward;
+    std::reverse(back.begin(), back.end());
+    back.insert(back.end(), forward.begin() + (forward.empty() ? 0 : 1), forward.end());
+    float arc = 0.0f;
+    for (std::size_t i = 0; i < back.size(); ++i) {
+        if (i > 0)
+            arc += glm::length(back[i].pos - back[i - 1].pos);
+        back[i].arc = arc;
+    }
+    return back;
+}
+
 } // namespace
 
-StreamlinePass::StreamlinePass() : shader_(gl::Shader::fromFiles("streamline.vert", "streamline.geom", "streamline.frag"))
+StreamlinePass::StreamlinePass(StreamlineSeeding seeding)
+    : seeding_(seeding), shader_(gl::Shader::fromFiles("streamline.vert", "streamline.geom", "streamline.frag"))
 {
     vao_ = gl::createVertexArray();
     vbo_ = gl::createBuffer();
@@ -109,9 +133,29 @@ void StreamlinePass::computeDefaults()
     dirty_ = true;
 }
 
-std::vector<glm::vec3> StreamlinePass::buildSeeds() const
+std::vector<glm::vec3> StreamlinePass::buildSeeds()
 {
     std::vector<glm::vec3> seeds;
+    if (seeding_ == StreamlineSeeding::VortexCores) {
+        if (!scene_.field || scene_.field->empty())
+            return seeds;
+        const core::FlowField& field = *scene_.field;
+        const float L = scene_.body && !scene_.body->empty() ? scene_.body->bounds().size().x : field.bounds().size().y;
+        if (coresDirty_) {
+            core::VortexCoreOptions options;
+            options.charLength = L;
+            options.minStrength = std::pow(10.0f, minStrengthLog_);
+            options.maxCores = coreCount_;
+            options.minSeparation = 0.15f * L;
+            cores_ = core::findVortexCores(field, options);
+            coresDirty_ = false;
+        }
+        const float cellSize = (field.spacing.x + field.spacing.y + field.spacing.z) / 3.0f;
+        for (const core::VortexCore& c : cores_)
+            for (const glm::vec3& p : core::ringAround(c, ringCells_ * cellSize, linesPerCore_))
+                seeds.push_back(p);
+        return seeds;
+    }
     const float zLow = centreZ_ - 0.5f * height_;
     const float zHigh = centreZ_ + 0.5f * height_;
 
@@ -152,13 +196,17 @@ void StreamlinePass::retrace()
         const float cellSize = (field.spacing.x + field.spacing.y + field.spacing.z) / 3.0f;
         const float stepLen = std::max(stepCells_ * cellSize, 1e-6f);
 
+        const auto trace = [&](const glm::vec3& seed) {
+            return seeding_ == StreamlineSeeding::VortexCores ? traceBothWays(field, seed, stepLen, maxSteps_)
+                                                               : traceOne(field, seed, stepLen, maxSteps_);
+        };
         std::vector<std::vector<StreamlinePoint>> results(seeds.size());
         const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
         const unsigned nThreads = static_cast<unsigned>(std::min<std::size_t>(hw, seeds.size()));
 
         if (nThreads <= 1) {
             for (std::size_t i = 0; i < seeds.size(); ++i)
-                results[i] = traceOne(field, seeds[i], stepLen, maxSteps_);
+                results[i] = trace(seeds[i]);
         } else {
             std::atomic<std::size_t> next{0};
             std::vector<std::thread> pool;
@@ -167,7 +215,7 @@ void StreamlinePass::retrace()
                 pool.emplace_back([&]() {
                     std::size_t i;
                     while ((i = next.fetch_add(1)) < seeds.size())
-                        results[i] = traceOne(field, seeds[i], stepLen, maxSteps_);
+                        results[i] = trace(seeds[i]);
                 });
             }
             for (auto& th : pool)
@@ -215,6 +263,7 @@ void StreamlinePass::uploadGeometry()
 void StreamlinePass::onBodyChanged(const SceneRefs& scene)
 {
     scene_ = scene;
+    coresDirty_ = true;
     computeDefaults();
     haveDefaults_ = true;
     retrace();
@@ -223,6 +272,7 @@ void StreamlinePass::onBodyChanged(const SceneRefs& scene)
 void StreamlinePass::onFieldChanged(const SceneRefs& scene)
 {
     scene_ = scene;
+    coresDirty_ = true;
     if (scene_.field && !scene_.field->empty()) {
         speedMax_ = std::max(scene_.field->maxSpeed(), 1e-3f);
         speedMin_ = 0.0f;
@@ -267,10 +317,37 @@ void StreamlinePass::draw(const FrameContext& frame)
     glDrawArrays(GL_LINES, 0, vertexCount_);
 }
 
+void StreamlinePass::drawSwirlUi(bool& changed)
+{
+    ImGui::TextWrapped("Lines start just beside the strongest swirling regions and are traced both ways, so they "
+                       "corkscrew around each vortex.");
+    bool coresChanged = false;
+    coresChanged |= ImGui::SliderInt("Vortices", &coreCount_, 1, 30);
+    coresChanged |= ImGui::SliderFloat("Min strength (log10 Q*)", &minStrengthLog_, -1.0f, 3.0f, "%.1f");
+    changed |= ImGui::SliderInt("Lines per vortex", &linesPerCore_, 1, 12);
+    changed |= ImGui::SliderFloat("Ring radius (cells)", &ringCells_, 0.5f, 8.0f, "%.1f");
+    if (coresChanged) {
+        coresDirty_ = true;
+        changed = true;
+    }
+    if (cores_.empty())
+        ImGui::TextDisabled("No vortices this strong: lower the minimum strength.");
+    else
+        ImGui::Text("%d vortices, strongest Q* %.0f", static_cast<int>(cores_.size()), cores_.front().strength);
+}
+
 void StreamlinePass::drawUi()
 {
     bool changed = false;
+    if (seeding_ == StreamlineSeeding::VortexCores)
+        drawSwirlUi(changed);
+    else
+        drawRakeUi(changed);
+    drawTraceUi(changed);
+}
 
+void StreamlinePass::drawRakeUi(bool& changed)
+{
     int mode = static_cast<int>(mode_);
     if (ImGui::Combo("Rake mode", &mode, "Rectangular\0Single line\0")) {
         mode_ = static_cast<RakeMode>(mode);
@@ -289,7 +366,10 @@ void StreamlinePass::drawUi()
         computeDefaults();
         changed = true;
     }
+}
 
+void StreamlinePass::drawTraceUi(bool& changed)
+{
     ImGui::Separator();
     changed |= ImGui::DragFloat("Step (x cell size)", &stepCells_, 0.01f, 0.05f, 4.0f, "%.2f");
     changed |= ImGui::SliderInt("Max steps", &maxSteps_, 10, 20000);
