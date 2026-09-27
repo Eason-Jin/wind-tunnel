@@ -22,6 +22,10 @@ struct SimulationParams {
     int refinementLevel = 3; // surface refinement level for meshing solvers
     int processors = 1;      // parallel ranks for solvers that support MPI
 
+    // Lattice-Boltzmann (GPU) solver.
+    int lbmRefine = 2;            // lattice cells per output cell along each axis
+    float lbmFlowThroughs = 2.5f; // run length in tunnel flow-through times (inlet to outlet at the inlet speed)
+
     std::filesystem::path workDir = "cases/run"; // scratch directory for file-based solvers
 };
 

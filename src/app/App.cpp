@@ -10,6 +10,7 @@
 #include "render/passes/SlicePass.h"
 #include "render/passes/StreamlinePass.h"
 #include "render/passes/VortexPass.h"
+#include "solvers/cuda/LbmSolver.h"
 #include "solvers/openfoam/OpenFoamSolver.h"
 #include "solvers/synthetic/SyntheticSolver.h"
 
@@ -97,6 +98,7 @@ App::App(Options options) : options_(std::move(options))
     } else if (f.rfind("openfoam:", 0) == 0) {
         setField(solvers::loadOpenFoamResult(f.substr(9)));
         fieldIsPreview_ = false;
+        fieldKind_ = SolverKind::OpenFoam;
         fieldSpeed_ = field_.freestreamSpeed;
         params_.inletSpeed = field_.freestreamSpeed;
         fieldParams_ = params_;
@@ -111,14 +113,37 @@ App::App(Options options) : options_(std::move(options))
         camera_.pitch = glm::radians(*options_.camPitchDeg);
     camera_.zoom(1.0f / std::max(options_.zoom, 1e-3f));
 
-    solverKind_ = solvers::OpenFoamSolver::available() ? SolverKind::OpenFoam : SolverKind::Synthetic;
+    solverKind_ = solverAvailable(SolverKind::OpenFoam) ? SolverKind::OpenFoam
+                  : solverAvailable(SolverKind::Lbm)    ? SolverKind::Lbm
+                                                        : SolverKind::Synthetic;
     if (options_.solve) {
-        if (lower(*options_.solve) == "openfoam")
+        const std::string kind = lower(*options_.solve);
+        if (kind == "openfoam")
             solverKind_ = SolverKind::OpenFoam;
-        else if (lower(*options_.solve) == "synthetic")
+        else if (kind == "lbm" || kind == "gpu")
+            solverKind_ = SolverKind::Lbm;
+        else if (kind == "synthetic")
             solverKind_ = SolverKind::Synthetic;
         else
-            throw std::runtime_error("Unknown --solve value: " + *options_.solve);
+            throw std::runtime_error("Unknown --solve value: " + *options_.solve + " (expected openfoam, lbm or synthetic)");
+    }
+}
+
+bool App::solverAvailable(SolverKind kind)
+{
+    switch (kind) {
+    case SolverKind::OpenFoam: return solvers::OpenFoamSolver::available();
+    case SolverKind::Lbm: return solvers::LbmSolver::available();
+    default: return true;
+    }
+}
+
+const char* App::solverLabel(SolverKind kind)
+{
+    switch (kind) {
+    case SolverKind::OpenFoam: return "OpenFOAM CFD";
+    case SolverKind::Lbm: return "GPU CFD (LBM)";
+    default: return "Instant preview";
     }
 }
 
@@ -353,6 +378,8 @@ void App::startSolver(SolverKind kind)
     runningKind_ = kind;
     if (kind == SolverKind::OpenFoam)
         solver_ = std::make_unique<solvers::OpenFoamSolver>();
+    else if (kind == SolverKind::Lbm)
+        solver_ = std::make_unique<solvers::LbmSolver>();
     else
         solver_ = std::make_unique<solvers::SyntheticSolver>();
 
@@ -440,6 +467,7 @@ void App::pollSolver()
         return; // body or settings changed while solving: keep the result cached, don't show it
     setField(std::move(result));
     fieldIsPreview_ = runningKind_ == SolverKind::Synthetic;
+    fieldKind_ = runningKind_;
     fieldSpeed_ = solveSpeed_;
     fieldParams_ = solveParams_;
     status_ = fieldIsPreview_ ? "Instant preview ready (potential flow: no wake or vortices)" : "Simulation finished";
@@ -468,8 +496,11 @@ bool App::restoreFromCache(SolverKind kind)
             return false;
         if (kind == SolverKind::Synthetic)
             return true; // potential flow scales exactly with speed
-        return p.refinementLevel == want.refinementLevel && p.iterations == want.iterations &&
-               std::abs(p.inletSpeed - want.inletSpeed) < 1e-4f && p.kinematicViscosity == want.kinematicViscosity;
+        if (std::abs(p.inletSpeed - want.inletSpeed) >= 1e-4f || p.kinematicViscosity != want.kinematicViscosity)
+            return false;
+        if (kind == SolverKind::Lbm)
+            return p.lbmRefine == want.lbmRefine && p.lbmFlowThroughs == want.lbmFlowThroughs;
+        return p.refinementLevel == want.refinementLevel && p.iterations == want.iterations;
     };
     const auto it = std::find_if(fieldCache_.begin(), fieldCache_.end(), matches);
     if (it == fieldCache_.end())
@@ -479,6 +510,7 @@ bool App::restoreFromCache(SolverKind kind)
     fieldCache_.push_front(entry); // most recently used first
     setField(entry.field);
     fieldIsPreview_ = kind == SolverKind::Synthetic;
+    fieldKind_ = kind;
     fieldSpeed_ = entry.params.inletSpeed;
     fieldParams_ = entry.params;
     if (fieldIsPreview_ && std::abs(fieldSpeed_ - params_.inletSpeed) > 1e-4f)
@@ -652,6 +684,14 @@ int App::runScreenshot()
                 lastMsg = msg;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        }
+        {
+            // The final progress line (the solver's summary) may land after the last poll.
+            std::lock_guard lock(solverState_.mutex);
+            const auto& p = solverState_.progress;
+            const std::string msg = p.stage + " " + std::to_string(static_cast<int>(p.fraction * 100)) + "% " + p.message;
+            if (msg != lastMsg)
+                std::cout << msg << '\n';
         }
         pollSolver();
         std::cout << status_ << '\n';
