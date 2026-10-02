@@ -28,7 +28,9 @@ struct PlaneStreamPoint {
 class SlicePass : public RenderPass {
 public:
     enum class Axis { X = 0, Y = 1, Z = 2 };
-    enum class Quantity { Speed = 0, Cp, Ux, Vorticity };
+    // Spin: the vorticity component through the plane, signed, so the two
+    // directions of rotation get opposite colours (zero in the middle).
+    enum class Quantity { Speed = 0, Cp, Ux, Vorticity, Spin };
 
     SlicePass();
     ~SlicePass() override;
@@ -48,6 +50,8 @@ public:
     // app can hide the free-roaming 3-D StreamlinePass and avoid showing the
     // same flow twice.
     bool ownsStreamlines() const { return enabled && showStreamlines_; }
+    // Colour the plane by `q` (as picking it in the panel does).
+    void setQuantity(Quantity q);
 
     // World-space plane (n.xyz, d) with n.p + d = 0 on the slice, when the
     // slice is visible and set to cut the model away on the viewer's side.

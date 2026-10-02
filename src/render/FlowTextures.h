@@ -4,6 +4,8 @@
 #include "render/gl/GlObjects.h"
 #include "render/gl/Shader.h"
 
+#include <vector>
+
 namespace render {
 
 // GPU copy of a FlowField, shared by all passes:
@@ -19,6 +21,10 @@ public:
     static constexpr GLuint kSolidUnit = 1;
 
     void upload(const core::FlowField& field);
+    // Replace the flow texture's contents with frame `index` of the field's
+    // clip (same grid; the solid mask and colour ranges stay those of the
+    // field). Call upload(field) to go back to the time average.
+    void uploadClipFrame(const core::FlowField& field, int index);
     void clear();
     bool valid() const { return static_cast<bool>(flow_); }
 
@@ -47,6 +53,7 @@ private:
     glm::vec3 gridMin_{0.0f}, gridSize_{1.0f};
     glm::ivec3 dims_{0};
     float maxSpeed_ = 1.0f, pMin_ = 0.0f, pMax_ = 1.0f, freestream_ = 1.0f;
+    std::vector<glm::vec4> frameTexels_; // uploadClipFrame scratch
 };
 
 } // namespace render

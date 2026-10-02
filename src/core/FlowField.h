@@ -1,11 +1,13 @@
 #pragma once
 
+#include "core/FlowClip.h"
 #include "core/SurfaceMesh.h"
 
 #include <glm/glm.hpp>
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace core {
@@ -29,6 +31,10 @@ struct FlowField {
     std::vector<glm::vec3> velocity; // m/s
     std::vector<float> pressure;     // kinematic pressure p/rho (m^2/s^2), gauge
     std::vector<std::uint8_t> solid; // 1 = inside the body
+
+    // Optional unsteady snapshots on this grid (unsteady solvers only);
+    // shared, since copies of a field (e.g. in the result cache) never edit it.
+    std::shared_ptr<const FlowClip> clip;
 
     bool empty() const { return velocity.empty(); }
     std::size_t cellCount() const { return static_cast<std::size_t>(dims.x) * dims.y * dims.z; }

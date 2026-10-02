@@ -57,6 +57,13 @@ public:
     void readSums(std::vector<float>& out);
     // Copy the latest post-collision populations (structure of arrays).
     void readPopulations(std::vector<float>& out);
+    // Add the current ux, uy, uz and rho - 1 of every cell to a snapshot
+    // buffer (allocated on first use; zero in solid cells). A few samples
+    // spanning a sound wave's period cancel the lattice's acoustic ripple.
+    void addSnapshotSample();
+    // Copy the snapshot sums, laid out like readSums(), and start a new
+    // snapshot. Returns how many samples they hold.
+    int readSnapshot(std::vector<float>& out);
 
     std::size_t deviceBytes() const;
 

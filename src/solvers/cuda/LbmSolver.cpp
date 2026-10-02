@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <memory>
 #include <cstdio>
 #include <stdexcept>
 #include <string>
@@ -74,6 +75,30 @@ void LbmSolver::run(const core::ProgressFn& progress, const std::atomic<bool>& c
     lbm::GpuLattice lattice(lp, flags);
     const double setupTime = seconds(t0);
 
+    // Output grid template (solid mask), shared by the clip frames and the mean.
+    core::FlowField base = core::makeFieldForDomain(plan.domain);
+    base.freestreamSpeed = params_.inletSpeed;
+    core::voxelizeSolid(body_, base);
+
+    // Clip of instantaneous snapshots for playback (the result is the mean).
+    auto clip = std::make_shared<core::FlowClip>();
+    clip->dims = base.dims;
+    clip->freestreamSpeed = params_.inletSpeed;
+    clip->frameSeconds = static_cast<float>(plan.clipEvery) * plan.units.dt;
+    int clipFrames = plan.clipFrames;
+    std::vector<float> snapshot;
+    auto captureFrame = [&] {
+        try {
+            const int samples = lattice.readSnapshot(snapshot);
+            core::FlowField frame = base;
+            lbm::resampleMeans(snapshot, samples, flags, plan.lattice, plan.refine, plan.units, frame);
+            clip->addFrame(frame.velocity, frame.pressure);
+        } catch (const std::exception&) {
+            clipFrames = 0; // e.g. no GPU memory left for the snapshot buffer: keep the run, drop the clip
+            clip->frames.clear();
+        }
+    };
+
     // --- Time stepping -----------------------------------------------------
     constexpr float f0 = 0.03f, f1 = 0.97f;
     constexpr int kChunk = 50;          // steps between cancel checks / progress
@@ -90,7 +115,27 @@ void LbmSolver::run(const core::ProgressFn& progress, const std::atomic<bool>& c
         int count = std::min(kChunk, plan.steps - step);
         if (step < plan.averageFrom)
             count = std::min(count, plan.averageFrom - step);
+        // ...nor across a clip frame.
+        // Each frame averages the states after steps (windowStart, nextFrame],
+        // so those are run one at a time.
+        const int nextFrame = plan.clipFrom + clip->frameCount() * plan.clipEvery;
+        const int windowStart = nextFrame - plan.clipSmoothing;
+        const bool recording = clip->frameCount() < clipFrames;
+        if (recording && step >= windowStart && step < nextFrame)
+            count = 1;
+        else if (recording && step < windowStart)
+            count = std::min(count, windowStart - step);
         lattice.advance(count, step >= plan.averageFrom ? plan.averageEvery : 0);
+        if (recording && lattice.step() > windowStart && lattice.step() <= nextFrame) {
+            try {
+                lattice.addSnapshotSample();
+            } catch (const std::exception&) {
+                clipFrames = 0; // no GPU memory for the snapshot buffer: keep the run, drop the clip
+                clip->frames.clear();
+            }
+        }
+        if (recording && clipFrames > 0 && lattice.step() == nextFrame)
+            captureFrame();
 
         if (lattice.step() >= nextHealth || lattice.step() == plan.steps) {
             nextHealth += kHealthEvery;
@@ -110,7 +155,7 @@ void LbmSolver::run(const core::ProgressFn& progress, const std::atomic<bool>& c
             const double remaining = elapsed / lattice.step() * (plan.steps - lattice.step());
             char buf[160];
             std::snprintf(buf, sizeof buf, "Step %d/%d  %s  %.0f MLUPS  peak %.2f U  ~%.0f s left", lattice.step(), plan.steps,
-                          lattice.step() > plan.averageFrom ? "averaging" : "developing", mlups,
+                          clip->frameCount() > 0 ? "recording clip" : lattice.step() > plan.averageFrom ? "averaging" : "developing", mlups,
                           lastMaxSpeed / plan.units.uLattice, remaining);
             report("Solving", f0 + (f1 - f0) * static_cast<float>(lattice.step()) / static_cast<float>(plan.steps), buf);
         }
@@ -121,18 +166,20 @@ void LbmSolver::run(const core::ProgressFn& progress, const std::atomic<bool>& c
     report("Mapping", f1, "Averaging onto the output grid");
     std::vector<float> sums;
     lattice.readSums(sums);
-    core::FlowField f = core::makeFieldForDomain(plan.domain);
-    f.freestreamSpeed = params_.inletSpeed;
-    core::voxelizeSolid(body_, f);
+    core::FlowField f = std::move(base);
     lbm::resampleMeans(sums, lattice.samples(), flags, plan.lattice, plan.refine, plan.units, f);
+    if (clip->frameCount() > 0)
+        f.clip = std::move(clip);
     field_ = std::move(f);
 
     char buf[256];
     std::snprintf(buf, sizeof buf,
-                  "LBM: %s lattice, %d steps (%d averaged) in %.0f s (%.0f MLUPS, setup %.1f s), %.0f MB GPU memory, output %s grid",
+                  "LBM: %s lattice, %d steps (%d averaged) in %.0f s (%.0f MLUPS, setup %.1f s), %.0f MB GPU memory, output %s grid, "
+                  "%d-frame clip",
                   dimsText(plan.lattice).c_str(), plan.steps, lattice.samples(), solveTime,
                   static_cast<double>(plan.cells()) * plan.steps / std::max(solveTime, 1e-6) * 1e-6, setupTime,
-                  static_cast<double>(lattice.deviceBytes()) / (1024.0 * 1024.0), dimsText(field_.dims).c_str());
+                  static_cast<double>(lattice.deviceBytes()) / (1024.0 * 1024.0), dimsText(field_.dims).c_str(),
+                  field_.clip ? field_.clip->frameCount() : 0);
     report("Done", 1.0f, buf);
 }
 

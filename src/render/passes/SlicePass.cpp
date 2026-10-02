@@ -60,6 +60,8 @@ const char* quantityName(SlicePass::Quantity q)
         return "Velocity Ux";
     case SlicePass::Quantity::Vorticity:
         return "Vorticity |w|";
+    case SlicePass::Quantity::Spin:
+        return "Spin (vorticity through the plane)";
     }
     return "?";
 }
@@ -71,6 +73,7 @@ const char* quantityUnits(SlicePass::Quantity q)
     case SlicePass::Quantity::Ux:
         return "m/s";
     case SlicePass::Quantity::Vorticity:
+    case SlicePass::Quantity::Spin:
         return "1/s";
     case SlicePass::Quantity::Cp:
         return "";
@@ -78,7 +81,8 @@ const char* quantityUnits(SlicePass::Quantity q)
     return "";
 }
 
-float scalarAtCell(const core::FlowField& f, int i, int j, int k, SlicePass::Quantity q)
+// `axis` is the plane's normal (0 = x, 1 = y, 2 = z), used by Spin.
+float scalarAtCell(const core::FlowField& f, int i, int j, int k, SlicePass::Quantity q, int axis = 1)
 {
     const std::size_t n = f.index(i, j, k);
     switch (q) {
@@ -88,7 +92,8 @@ float scalarAtCell(const core::FlowField& f, int i, int j, int k, SlicePass::Qua
         return f.velocity[n].x;
     case SlicePass::Quantity::Cp:
         return f.pressure.empty() ? 0.0f : f.pressure[n] / std::max(0.5f * f.freestreamSpeed * f.freestreamSpeed, 1e-6f);
-    case SlicePass::Quantity::Vorticity: {
+    case SlicePass::Quantity::Vorticity:
+    case SlicePass::Quantity::Spin: {
         auto clampAxis = [](int x, int n) { return std::clamp(x, 0, n - 1); };
         const int ip = clampAxis(i + 1, f.dims.x), im = clampAxis(i - 1, f.dims.x);
         const int jp = clampAxis(j + 1, f.dims.y), jm = clampAxis(j - 1, f.dims.y);
@@ -103,7 +108,7 @@ float scalarAtCell(const core::FlowField& f, int i, int j, int k, SlicePass::Qua
         const float dVxdz = (vZp.x - vZm.x) / dz, dVzdx = (vXp.z - vXm.z) / dx;
         const float dVydx = (vXp.y - vXm.y) / dx, dVxdy = (vYp.x - vYm.x) / dy;
         const glm::vec3 curl(dVzdy - dVydz, dVxdz - dVzdx, dVydx - dVxdy);
-        return glm::length(curl);
+        return q == SlicePass::Quantity::Spin ? curl[std::clamp(axis, 0, 2)] : glm::length(curl);
     }
     }
     return 0.0f;
@@ -321,6 +326,16 @@ void SlicePass::updateDefaultPosition()
     position_ = size > 1e-6f ? std::clamp((centreY - b.min.y) / size, 0.0f, 1.0f) : 0.5f;
 }
 
+void SlicePass::setQuantity(Quantity q)
+{
+    quantity_ = q;
+    resetRangeForQuantity();
+    if (quantity_ == Quantity::Spin && showStreamlines_) {
+        showStreamlines_ = false; // lines would hide the eddies
+        retraceStreamlines();
+    }
+}
+
 void SlicePass::resetRangeForQuantity()
 {
     const float maxSpeed = (scene_.field && !scene_.field->empty()) ? scene_.field->maxSpeed() : 1.0f;
@@ -343,6 +358,43 @@ void SlicePass::resetRangeForQuantity()
         if (scene_.field && !scene_.field->empty())
             computeAutoRange();
         break;
+    case Quantity::Spin: {
+        // Symmetric about zero, so no rotation sits mid-colormap. The peaks
+        // (thin layers on the body) would wash everything else out, so the
+        // range is the 99th percentile of |spin| in the air.
+        float scale = 1.0f;
+        if (scene_.field && !scene_.field->empty()) {
+            // With a clip, scale for its snapshots: their eddies spin much
+            // harder than the time average.
+            core::FlowField snapshot;
+            if (scene_.field->clip && scene_.field->clip->dims == scene_.field->dims) {
+                snapshot.dims = scene_.field->dims;
+                snapshot.spacing = scene_.field->spacing;
+                snapshot.solid = scene_.field->solid;
+                std::vector<glm::vec4> cells;
+                scene_.field->clip->decodeFrame(0, scene_.field->freestreamSpeed, cells);
+                snapshot.velocity.resize(cells.size());
+                for (std::size_t c = 0; c < cells.size(); ++c)
+                    snapshot.velocity[c] = glm::vec3(cells[c]);
+            }
+            const core::FlowField& f = snapshot.empty() ? *scene_.field : snapshot;
+            std::vector<float> spins;
+            spins.reserve(f.cellCount() / 8 + 1);
+            for (int k = 0; k < f.dims.z; k += 2)
+                for (int j = 0; j < f.dims.y; j += 2)
+                    for (int i = 0; i < f.dims.x; i += 2)
+                        if (f.solid.empty() || !f.solid[f.index(i, j, k)])
+                            spins.push_back(std::abs(scalarAtCell(f, i, j, k, quantity_, static_cast<int>(axis_))));
+            if (!spins.empty()) {
+                auto at = spins.begin() + static_cast<std::ptrdiff_t>(0.99 * static_cast<double>(spins.size() - 1));
+                std::nth_element(spins.begin(), at, spins.end());
+                scale = std::max(*at, 1e-3f);
+            }
+        }
+        rangeMin_ = -scale;
+        rangeMax_ = scale;
+        break;
+    }
     }
 }
 
@@ -358,7 +410,7 @@ void SlicePass::computeAutoRange()
             for (int i = 0; i < f.dims.x; ++i) {
                 if (!f.solid.empty() && f.solid[f.index(i, j, k)])
                     continue;
-                const float v = scalarAtCell(f, i, j, k, quantity_);
+                const float v = scalarAtCell(f, i, j, k, quantity_, static_cast<int>(axis_));
                 lo = std::min(lo, v);
                 hi = std::max(hi, v);
             }
@@ -669,6 +721,7 @@ void SlicePass::draw(const FrameContext& frame)
     scene_.flowTextures->setUniforms(planeShader_);
     planeShader_.set("uColormap", static_cast<int>(kColormapUnit));
     planeShader_.set("uQuantity", static_cast<int>(quantity_));
+    planeShader_.set("uAxis", static_cast<int>(axis_));
     planeShader_.set("uRangeMin", rangeMin_);
     planeShader_.set("uRangeMax", rangeMax_);
     planeShader_.set("uShowSolid", showSolid_ ? 1 : 0);
@@ -744,6 +797,8 @@ void SlicePass::drawUi()
             axis_ = static_cast<Axis>(i);
             userSetPosition_ = true;
             planeChanged = true;
+            if (quantity_ == Quantity::Spin)
+                resetRangeForQuantity(); // the spin component follows the plane
         }
         if (active)
             ImGui::PopStyleColor();
@@ -792,11 +847,11 @@ void SlicePass::drawUi()
 
     // ---- Quantity ----------------------------------------------------------
     int quantityIdx = static_cast<int>(quantity_);
-    static const char* quantityNames[] = {"Speed |U|", "Pressure Cp", "Velocity Ux", "Vorticity |w|"};
-    if (ImGui::Combo("Quantity", &quantityIdx, quantityNames, 4)) {
-        quantity_ = static_cast<Quantity>(quantityIdx);
-        resetRangeForQuantity();
-    }
+    static const char* quantityNames[] = {"Speed |U|", "Pressure Cp", "Velocity Ux", "Vorticity |w|", "Spin (eddies)"};
+    if (ImGui::Combo("Quantity", &quantityIdx, quantityNames, 5))
+        setQuantity(static_cast<Quantity>(quantityIdx));
+    if (quantity_ == Quantity::Spin)
+        ImGui::TextDisabled("Red and blue: air turning opposite ways. Green: not turning.");
 
     // ---- In-plane streamlines: on/off + spacing (live retrace) ------------
     bool streamChanged = false;

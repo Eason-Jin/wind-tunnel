@@ -53,6 +53,9 @@ private:
     void previewSyntheticField(); // async in window mode, synchronous for screenshots
     void rescaleField(float newSpeed); // potential flow scales exactly with U
     void setField(core::FlowField field);
+    // Show the unsteady clip (if the field has one) in the flow texture,
+    // stepping through it while playing; restores the mean when switched off.
+    void advanceClip(float dt);
     void notifyBody();
     void notifyField();
     void frameCamera();
@@ -118,6 +121,10 @@ private:
     enum class SpeedUnit { Kmh = 0, Ms = 1 };
     SpeedUnit speedUnit_ = SpeedUnit::Kmh;
     bool playing_ = false;
+    bool showClip_ = true;     // animate the field's clip instead of showing its time average
+    float clipTime_ = 0.0f;    // playback position, seconds
+    int clipFrame_ = -1;       // clip frame in the flow texture; -1 = time average
+    static constexpr float kClipFps = 24.0f;
     bool playAfterSolve_ = false;
     bool fieldIsPreview_ = true; // current field is the instant analytic preview
     SolverKind fieldKind_ = SolverKind::Synthetic; // solver that produced the current field

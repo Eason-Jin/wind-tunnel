@@ -26,6 +26,8 @@ int GpuLattice::samples() const { return 0; }
 LatticeHealth GpuLattice::health() { unavailable(); }
 void GpuLattice::readSums(std::vector<float>&) { unavailable(); }
 void GpuLattice::readPopulations(std::vector<float>&) { unavailable(); }
+void GpuLattice::addSnapshotSample() { unavailable(); }
+int GpuLattice::readSnapshot(std::vector<float>&) { unavailable(); }
 std::size_t GpuLattice::deviceBytes() const { return 0; }
 
 } // namespace solvers::lbm

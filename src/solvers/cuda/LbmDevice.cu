@@ -80,6 +80,28 @@ __global__ void healthKernel(LatticeParams p, const float* __restrict__ f, const
     }
 }
 
+__global__ void momentsKernel(LatticeParams p, const float* __restrict__ f, const std::uint8_t* __restrict__ flags,
+                              float* __restrict__ out)
+{
+    const std::size_t c = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const std::size_t n = p.cells();
+    if (c >= n)
+        return;
+    float u[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    if (!(flags[c] & kSolid)) {
+        float g[kQ];
+        for (int k = 0; k < kQ; ++k)
+            g[k] = f[static_cast<std::size_t>(k) * n + c];
+        const Moments m = moments(g);
+        u[0] = m.ux;
+        u[1] = m.uy;
+        u[2] = m.uz;
+        u[3] = m.rho - 1.0f;
+    }
+    for (int q = 0; q < 4; ++q)
+        out[static_cast<std::size_t>(q) * n + c] += u[q];
+}
+
 } // namespace
 
 bool deviceAvailable()
@@ -111,6 +133,8 @@ struct GpuLattice::Impl {
     float* fB = nullptr;
     std::uint8_t* flags = nullptr;
     float* sums = nullptr;
+    float* moments = nullptr; // snapshot sums, allocated on first use
+    int snapshotSamples = 0;
     unsigned* maxSpeedBits = nullptr;
     unsigned long long* bad = nullptr;
     int step = 0;
@@ -123,6 +147,7 @@ struct GpuLattice::Impl {
         cudaFree(fB);
         cudaFree(flags);
         cudaFree(sums);
+        cudaFree(moments);
         cudaFree(maxSpeedBits);
         cudaFree(bad);
     }
@@ -203,6 +228,34 @@ void GpuLattice::readSums(std::vector<float>& out)
     const std::size_t n = impl_->params.cells();
     out.resize(4 * n);
     check(cudaMemcpy(out.data(), impl_->sums, 4 * n * sizeof(float), cudaMemcpyDeviceToHost), "reading averages");
+}
+
+void GpuLattice::addSnapshotSample()
+{
+    Impl& d = *impl_;
+    const std::size_t n = d.params.cells();
+    if (!d.moments) {
+        check(cudaMalloc(&d.moments, 4 * n * sizeof(float)), "allocating the snapshot buffer");
+        check(cudaMemset(d.moments, 0, 4 * n * sizeof(float)), "clearing the snapshot buffer");
+        d.bytes += 4 * n * sizeof(float);
+    }
+    momentsKernel<<<blocksFor(n), kBlock>>>(d.params, d.fA, d.flags, d.moments);
+    check(cudaGetLastError(), "sampling a snapshot");
+    ++d.snapshotSamples;
+}
+
+int GpuLattice::readSnapshot(std::vector<float>& out)
+{
+    Impl& d = *impl_;
+    const std::size_t n = d.params.cells();
+    out.assign(4 * n, 0.0f);
+    const int samples = d.snapshotSamples;
+    if (d.moments) {
+        check(cudaMemcpy(out.data(), d.moments, 4 * n * sizeof(float), cudaMemcpyDeviceToHost), "reading a snapshot");
+        check(cudaMemset(d.moments, 0, 4 * n * sizeof(float)), "clearing the snapshot buffer");
+    }
+    d.snapshotSamples = 0;
+    return samples;
 }
 
 void GpuLattice::readPopulations(std::vector<float>& out)

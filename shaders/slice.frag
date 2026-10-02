@@ -17,7 +17,8 @@ uniform float uFreestream;
 
 uniform sampler1D uColormap;
 
-uniform int uQuantity; // 0 = speed, 1 = Cp, 2 = Ux, 3 = vorticity magnitude
+uniform int uQuantity; // 0 = speed, 1 = Cp, 2 = Ux, 3 = vorticity magnitude, 4 = vorticity along the plane normal
+uniform int uAxis;     // plane normal: 0 = x, 1 = y, 2 = z
 uniform float uRangeMin;
 uniform float uRangeMax;
 uniform bool uShowSolid; // false => discard solid fragments
@@ -25,8 +26,45 @@ uniform bool uContours;
 uniform int uContourCount;
 uniform float uOpacity;
 
+vec3 curlAt(vec3 tc)
+{
+    vec3 d = 1.0 / vec3(uGridDims);
+    vec3 cell = uGridSize / vec3(uGridDims);
+    vec3 vXp = texture(uFlow, tc + vec3(d.x, 0.0, 0.0)).rgb;
+    vec3 vXm = texture(uFlow, tc - vec3(d.x, 0.0, 0.0)).rgb;
+    vec3 vYp = texture(uFlow, tc + vec3(0.0, d.y, 0.0)).rgb;
+    vec3 vYm = texture(uFlow, tc - vec3(0.0, d.y, 0.0)).rgb;
+    vec3 vZp = texture(uFlow, tc + vec3(0.0, 0.0, d.z)).rgb;
+    vec3 vZm = texture(uFlow, tc - vec3(0.0, 0.0, d.z)).rgb;
+    vec3 dVdx = (vXp - vXm) / (2.0 * cell.x);
+    vec3 dVdy = (vYp - vYm) / (2.0 * cell.y);
+    vec3 dVdz = (vZp - vZm) / (2.0 * cell.z);
+    return vec3(dVdy.z - dVdz.y, dVdz.x - dVdx.z, dVdx.y - dVdy.x);
+}
+
+// Vorticity through the plane, smoothed with a 3x3 binomial filter in the
+// plane: unsteady snapshots carry a grid-scale ripple that differentiation
+// amplifies, while eddies span many cells and keep most of their strength.
+float spinAt(vec3 tc)
+{
+    int axis = clamp(uAxis, 0, 2);
+    vec3 d = 1.0 / vec3(uGridDims);
+    vec3 a = vec3(0.0), b = vec3(0.0);
+    a[(axis + 1) % 3] = d[(axis + 1) % 3];
+    b[(axis + 2) % 3] = d[(axis + 2) % 3];
+    float sum = 0.0;
+    for (int i = -1; i <= 1; ++i)
+        for (int j = -1; j <= 1; ++j) {
+            float w = (i == 0 ? 2.0 : 1.0) * (j == 0 ? 2.0 : 1.0);
+            sum += w * curlAt(tc + float(i) * a + float(j) * b)[axis];
+        }
+    return sum / 16.0;
+}
+
 float scalarAt(vec3 tc, vec3 vel, float pressure)
 {
+    if (uQuantity == 4)
+        return spinAt(tc);
     if (uQuantity == 0)
         return length(vel);
     if (uQuantity == 1)

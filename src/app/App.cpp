@@ -242,6 +242,12 @@ void App::createPasses()
     const std::vector<std::string> defaults = {"tunnel", "model", "streamline"};
     for (auto& p : passes_)
         p->enabled = passSelected(options_.passes.value_or(defaults), p->name());
+    if (options_.sliceQuantity)
+        if (auto* slice = dynamic_cast<render::SlicePass*>(findPass("Slice"))) {
+            const std::string& q = *options_.sliceQuantity;
+            using Q = render::SlicePass::Quantity;
+            slice->setQuantity(q == "cp" ? Q::Cp : q == "ux" ? Q::Ux : q == "vorticity" ? Q::Vorticity : q == "spin" ? Q::Spin : Q::Speed);
+        }
 }
 
 bool App::loadBody(const std::string& path, float scale)
@@ -345,6 +351,7 @@ void App::setField(core::FlowField field)
 {
     field_ = std::move(field);
     flowTextures_.upload(field_);
+    clipFrame_ = -1; // the upload shows the time average; advanceClip() puts the clip back
     notifyField();
 }
 
@@ -537,8 +544,28 @@ void App::toggleFullscreen()
     glfwSwapInterval(1);
 }
 
+void App::advanceClip(float dt)
+{
+    if (!field_.clip || !showClip_) {
+        if (clipFrame_ >= 0) {
+            flowTextures_.upload(field_);
+            clipFrame_ = -1;
+        }
+        return;
+    }
+    if (playing_)
+        clipTime_ += dt;
+    const int frames = field_.clip->frameCount();
+    const int frame = static_cast<int>(clipTime_ * kClipFps) % frames;
+    if (frame != clipFrame_) {
+        flowTextures_.uploadClipFrame(field_, frame);
+        clipFrame_ = frame;
+    }
+}
+
 void App::renderScene(int x, int y, int width, int height, float time, float dt)
 {
+    advanceClip(std::clamp(dt, 0.0f, 0.1f));
     glDisable(GL_SCISSOR_TEST);
     glClearColor(background_.r, background_.g, background_.b, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);

@@ -5,6 +5,14 @@
 
 namespace render {
 
+void FlowTextures::uploadClipFrame(const core::FlowField& field, int index)
+{
+    if (!field.clip || !flow_ || field.clip->dims != dims_ || index < 0 || index >= field.clip->frameCount())
+        return;
+    field.clip->decodeFrame(index, field.freestreamSpeed, frameTexels_);
+    glTextureSubImage3D(flow_.id(), 0, 0, 0, 0, dims_.x, dims_.y, dims_.z, GL_RGBA, GL_FLOAT, frameTexels_.data());
+}
+
 void FlowTextures::upload(const core::FlowField& field)
 {
     clear();

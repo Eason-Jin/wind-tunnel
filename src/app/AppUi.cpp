@@ -177,9 +177,10 @@ void App::setPlaying(bool playing)
     playing_ = playing;
     if (playing && !layersShownOnPlay_) {
         // First Play: bring in the animated / aero layers so there is something to watch.
-        for (const char* name : {"Particle", "Vortices"})
-            if (render::RenderPass* p = findPass(name))
-                p->enabled = true;
+        // Not over the section plane, though: smoke would hide what it shows.
+        const render::RenderPass* slice = findPass("Slice");
+        if (render::RenderPass* smoke = findPass("Particle"); smoke && !(slice && slice->enabled))
+            smoke->enabled = true;
         layersShownOnPlay_ = true;
     }
     for (auto& p : passes_)
@@ -651,6 +652,18 @@ void App::drawLeftPanel()
                  speedUnitName(u));
         if (needsSolve() && !field_.empty())
             ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::colour::kWarning), "Out of date - press Simulate");
+        if (field_.clip) {
+            const core::FlowClip& clip = *field_.clip;
+            ImGui::Checkbox("Animate the flow", &showClip_);
+            ui::hint("%d snapshots of the unsteady flow (%.0f ms of simulated time), looped by Play. Off shows the "
+                     "time average. Best seen on the section plane coloured by Spin.",
+                     clip.frameCount(), 1000.0f * clip.frameSeconds * static_cast<float>(clip.frameCount() - 1));
+            if (showClip_) {
+                int frame = std::max(clipFrame_, 0);
+                if (ImGui::SliderInt("Frame", &frame, 0, clip.frameCount() - 1))
+                    clipTime_ = (static_cast<float>(frame) + 0.5f) / kClipFps;
+            }
+        }
     }
 
     ImGui::End();

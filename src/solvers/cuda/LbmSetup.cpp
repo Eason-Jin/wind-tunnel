@@ -57,6 +57,21 @@ LbmPlan makeLbmPlan(const core::Bounds& body, const core::SimulationParams& para
     // The first 40% develops the flow (the start is impulsive); the rest is
     // averaged, which for the default run length is over a flow-through.
     plan.averageFrom = static_cast<int>(0.4f * static_cast<float>(plan.steps));
+
+    // A clip of the end of the run for playback: the free stream moves about
+    // 1.5 output cells between frames (smooth motion), with as many frames as
+    // the memory budget allows (8 bytes per output cell per frame), all within
+    // the developed part of the run.
+    const std::size_t outputCells = static_cast<std::size_t>(plan.domain.cells.x) * plan.domain.cells.y * plan.domain.cells.z;
+    plan.clipEvery = std::max(1, static_cast<int>(std::lround(1.5f * static_cast<float>(plan.refine) / plan.units.uLattice)));
+    // Each snapshot averages the half frame spacing before it: the flow moves
+    // under a cell in that time, so the eddies barely blur while faster
+    // lattice noise averages out.
+    plan.clipSmoothing = std::max(1, plan.clipEvery / 2);
+    int frames = static_cast<int>(std::min<std::size_t>(kClipMaxFrames, kClipBudgetBytes / std::max<std::size_t>(8 * outputCells, 1)));
+    frames = std::min(frames, (plan.steps - plan.averageFrom - plan.clipSmoothing) / plan.clipEvery + 1);
+    plan.clipFrames = frames >= kClipMinFrames ? frames : 0;
+    plan.clipFrom = plan.steps - (std::max(plan.clipFrames, 1) - 1) * plan.clipEvery;
     plan.deviceBytes = latticeDeviceBytes(plan.cells());
     return plan;
 }

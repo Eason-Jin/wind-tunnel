@@ -58,6 +58,10 @@ struct LbmPlan {
     int steps = 0;               // time steps in the run
     int averageFrom = 0;         // first step whose state goes into the time average
     int averageEvery = 4;        // sample the average every this many steps
+    int clipFrames = 0;          // instantaneous snapshots to record (0 = no clip)
+    int clipEvery = 1;           // steps between snapshots
+    int clipFrom = 0;            // step of the first snapshot; the last falls on `steps`
+    int clipSmoothing = 1;       // steps averaged into each snapshot, ending on its step
     std::size_t deviceBytes = 0; // GPU memory the lattice needs
 
     std::size_t cells() const { return static_cast<std::size_t>(lattice.x) * lattice.y * lattice.z; }
@@ -67,6 +71,11 @@ struct LbmPlan {
 // Bytes of GPU memory for a lattice of `cells` cells: two population sets,
 // flags and four time-average sums.
 std::size_t latticeDeviceBytes(std::size_t cells);
+
+// Host memory a recorded clip may use, and its frame limits.
+constexpr std::size_t kClipBudgetBytes = 512u << 20;
+constexpr int kClipMaxFrames = 96;
+constexpr int kClipMinFrames = 12;
 
 LbmPlan makeLbmPlan(const core::Bounds& body, const core::SimulationParams& params);
 
