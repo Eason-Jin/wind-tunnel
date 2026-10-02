@@ -391,6 +391,13 @@ void SlicePass::resetRangeForQuantity()
                 scale = std::max(*at, 1e-3f);
             }
         }
+        // Never below 2 U / L (L: body length): a field with almost no spin
+        // (e.g. the potential-flow preview) then reads as plain green
+        // instead of magnified numerical noise.
+        if (scene_.field && !scene_.field->empty()) {
+            const float L = scene_.body && !scene_.body->empty() ? scene_.body->bounds().size().x : scene_.field->bounds().size().x;
+            scale = std::max(scale, 2.0f * scene_.field->freestreamSpeed / std::max(L, 1e-4f));
+        }
         rangeMin_ = -scale;
         rangeMax_ = scale;
         break;

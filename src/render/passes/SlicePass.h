@@ -98,7 +98,7 @@ private:
     // UI state.
     Axis axis_ = Axis::Y;
     float position_ = 0.5f; // fraction across the grid bounds on `axis_`
-    bool cutModel_ = true;  // clip the body at the plane (CAD-style section view)
+    bool cutModel_ = false; // clip the body at the plane (CAD-style section view); off: whole model, air-only plane
     bool userSetPosition_ = false;
     Quantity quantity_ = Quantity::Speed;
     int colormapIndex_ = 0;

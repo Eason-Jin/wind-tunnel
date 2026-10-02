@@ -661,6 +661,12 @@ int App::runWindow()
     // GNOME); maximising the mapped window is reliable.
     glfwMaximizeWindow(window_);
     if (options_.solve) {
+        // The start-up preview may still be running; startSolver() would
+        // otherwise ignore the request.
+        if (running_ && runningKind_ == SolverKind::Synthetic) {
+            cancelSolver();
+            pollSolver(); // discard the cancelled preview
+        }
         playAfterSolve_ = options_.play;
         startSolver(solverKind_);
     } else if (options_.play) {
